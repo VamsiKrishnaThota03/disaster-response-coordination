@@ -13,8 +13,7 @@ import {
   useColorModeValue,
 } from '@chakra-ui/react';
 import { FaExternalLinkAlt, FaBuilding, FaClock } from 'react-icons/fa';
-
-const BACKEND_URL = 'http://localhost:3001';
+import { BACKEND_URL } from '../config';
 
 const UpdateCard = ({ update }) => {
   const cardBg = useColorModeValue('gray.800', 'gray.800');

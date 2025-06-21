@@ -15,8 +15,7 @@ import {
 } from '@chakra-ui/react';
 import { FaImage, FaCheckCircle, FaTimesCircle, FaHourglassHalf } from 'react-icons/fa';
 import { MdAccessTime, MdPriorityHigh } from 'react-icons/md';
-
-const BACKEND_URL = 'http://localhost:3001';
+import { BACKEND_URL } from '../config';
 
 const ReportCard = ({ report }) => {
   const cardBg = useColorModeValue('gray.800', 'gray.800');
