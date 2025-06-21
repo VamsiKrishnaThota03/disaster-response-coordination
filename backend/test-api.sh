@@ -6,159 +6,129 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
-# Base URL
-API_URL="http://localhost:3001"
+# Base URL for the API
+BASE_URL="http://localhost:3001/api"
 
-echo -e "${BLUE}Starting API Tests...${NC}\n"
+# Function to make API calls and check responses
+test_endpoint() {
+    local method=$1
+    local endpoint=$2
+    local data=$3
+    local expected_status=$4
+    local description=$5
 
-# Test 1: Create disaster with exact address
-echo -e "${BLUE}Test 1: Create disaster with exact address${NC}"
-curl -X POST "${API_URL}/disasters" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Building Fire",
-    "description": "Major fire at 350 5th Avenue, New York, NY (Empire State Building). Multiple fire trucks responding.",
-    "tags": ["fire", "emergency"],
-    "owner_id": "testUser1"
-  }'
-echo -e "\n\n"
+    echo -e "\n🔍 Testing: $description"
+    
+    if [ "$method" = "GET" ]; then
+        response=$(curl -s -w "%{http_code}" -X $method "$BASE_URL$endpoint")
+    else
+        response=$(curl -s -w "%{http_code}" -X $method "$BASE_URL$endpoint" \
+            -H "Content-Type: application/json" \
+            -d "$data")
+    fi
 
-# Test 2: Create disaster with landmark
-echo -e "${BLUE}Test 2: Create disaster with landmark${NC}"
-curl -X POST "${API_URL}/disasters" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Protest Alert",
-    "description": "Large protest gathering near the Eiffel Tower in Paris, France. Traffic disruptions expected.",
-    "tags": ["civil_unrest", "crowd"],
-    "owner_id": "testUser2"
-  }'
-echo -e "\n\n"
+    http_code=${response: -3}
+    body=${response:0:${#response}-3}
 
-# Test 3: Create disaster with neighborhood
-echo -e "${BLUE}Test 3: Create disaster with neighborhood${NC}"
-curl -X POST "${API_URL}/disasters" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Flash Flooding",
-    "description": "Severe flash flooding in Brooklyn Heights, Brooklyn. Multiple streets affected.",
-    "tags": ["flood", "emergency"],
-    "owner_id": "testUser3"
-  }'
-echo -e "\n\n"
+    if [ "$http_code" = "$expected_status" ]; then
+        echo -e "${GREEN}✓ Success: $description${NC}"
+        echo "Response: $body"
+    else
+        echo -e "${RED}✗ Failed: $description${NC}"
+        echo "Expected status: $expected_status, got: $http_code"
+        echo "Response: $body"
+        exit 1
+    fi
+}
 
-# Test 4: Create disaster with multiple locations (should pick primary)
-echo -e "${BLUE}Test 4: Create disaster with multiple locations${NC}"
-curl -X POST "${API_URL}/disasters" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Earthquake Impact",
-    "description": "6.2 magnitude earthquake in Tokyo, Japan. Aftershocks felt in Yokohama and Kawasaki.",
-    "tags": ["earthquake", "emergency"],
-    "owner_id": "testUser4"
-  }'
-echo -e "\n\n"
+echo "🚀 Starting API Tests..."
 
-# Test 5: Create disaster with intersection
-echo -e "${BLUE}Test 5: Create disaster with intersection${NC}"
-curl -X POST "${API_URL}/disasters" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Traffic Accident",
-    "description": "Major pile-up at the intersection of Hollywood and Vine in Los Angeles, CA.",
-    "tags": ["accident", "traffic"],
-    "owner_id": "testUser5"
-  }'
-echo -e "\n\n"
+# Test Disaster Endpoints
+echo -e "\n📋 Testing Disaster Endpoints"
 
-# Test 6: Create disaster with region/area
-echo -e "${BLUE}Test 6: Create disaster with region/area${NC}"
-curl -X POST "${API_URL}/disasters" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Forest Fire Warning",
-    "description": "Uncontrolled forest fire spreading in Northern California, particularly in Mendocino National Forest.",
-    "tags": ["fire", "wildfire", "evacuation"],
-    "owner_id": "testUser6"
-  }'
-echo -e "\n\n"
+# Create a disaster
+DISASTER_DATA='{
+    "title": "Test Flood",
+    "description": "Severe flooding in Miami Beach, Florida",
+    "type": "flood",
+    "severity": "high",
+    "tags": ["flood", "emergency"]
+}'
+test_endpoint "POST" "/disasters" "$DISASTER_DATA" "201" "Create new disaster"
 
-# Test 7: Create disaster with postal code
-echo -e "${BLUE}Test 7: Create disaster with postal code${NC}"
-curl -X POST "${API_URL}/disasters" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Gas Leak",
-    "description": "Dangerous gas leak reported in London postal code SW1A 1AA. Area being evacuated.",
-    "tags": ["hazmat", "evacuation"],
-    "owner_id": "testUser7"
-  }'
-echo -e "\n\n"
+# Get all disasters
+test_endpoint "GET" "/disasters" "" "200" "Get all disasters"
 
-# Test 8: Create disaster with colloquial place name
-echo -e "${BLUE}Test 8: Create disaster with colloquial place name${NC}"
-curl -X POST "${API_URL}/disasters" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Power Outage",
-    "description": "Widespread power outage affecting the entire Silicon Valley area.",
-    "tags": ["power_outage", "infrastructure"],
-    "owner_id": "testUser8"
-  }'
-echo -e "\n\n"
+# Get disasters by tag
+test_endpoint "GET" "/disasters?tag=flood" "" "200" "Get disasters by tag"
 
-# Test 9: Create disaster with vague location
-echo -e "${BLUE}Test 9: Create disaster with vague location${NC}"
-curl -X POST "${API_URL}/disasters" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Storm Warning",
-    "description": "Severe thunderstorm approaching the downtown area.",
-    "tags": ["weather", "storm"],
-    "owner_id": "testUser9"
-  }'
-echo -e "\n\n"
+# Get the first disaster ID for further tests
+DISASTER_ID=$(curl -s "$BASE_URL/disasters" | jq -r '.[0].id')
 
-# Test 10: Get all disasters
-echo -e "${BLUE}Test 10: Get all disasters${NC}"
-curl "${API_URL}/disasters"
-echo -e "\n\n"
+# Get specific disaster
+test_endpoint "GET" "/disasters/$DISASTER_ID" "" "200" "Get specific disaster"
 
-# Test 11: Get disasters filtered by tag
-echo -e "${BLUE}Test 11: Get disasters filtered by emergency tag${NC}"
-curl "${API_URL}/disasters?tag=emergency"
-echo -e "\n\n"
+# Update disaster
+UPDATE_DATA='{
+    "title": "Updated Test Flood",
+    "severity": "medium"
+}'
+test_endpoint "PUT" "/disasters/$DISASTER_ID" "$UPDATE_DATA" "200" "Update disaster"
 
-# Test Resource API
-echo "Testing Resource API..."
+# Test Resource Endpoints
+echo -e "\n📍 Testing Resource Endpoints"
 
-# Create a test resource
-echo -e "\nCreating test resource..."
-RESOURCE_RESPONSE=$(curl -s -X POST "${API_URL}/api/resources" \
-  -H "Content-Type: application/json" \
-  -d '{
+# Create a resource
+RESOURCE_DATA='{
     "name": "Emergency Shelter",
     "type": "shelter",
-    "location_name": "Downtown Community Center",
-    "latitude": 37.7881,
-    "longitude": -122.4075,
+    "location_name": "Miami Beach Community Center",
+    "location": "POINT(-80.1300 25.7617)",
     "status": "active"
-  }')
+}'
+test_endpoint "POST" "/disasters/$DISASTER_ID/resources" "$RESOURCE_DATA" "201" "Create new resource"
 
-echo "Resource creation response: $RESOURCE_RESPONSE"
+# Get nearby resources
+test_endpoint "GET" "/disasters/$DISASTER_ID/resources?radius=5000" "" "200" "Get nearby resources"
 
-# Test nearby resources
-echo -e "\nTesting nearby resources..."
-NEARBY_RESPONSE=$(curl -s "${API_URL}/api/resources/nearby?latitude=37.7881&longitude=-122.4075&radius=1000")
+# Test Report Endpoints
+echo -e "\n📝 Testing Report Endpoints"
 
-echo "Nearby resources response: $NEARBY_RESPONSE"
+# Create a report
+REPORT_DATA='{
+    "content": "Water levels rising rapidly",
+    "image_url": "https://example.com/flood.jpg"
+}'
+test_endpoint "POST" "/disasters/$DISASTER_ID/reports" "$REPORT_DATA" "201" "Create new report"
 
-# Count resources found
-RESOURCE_COUNT=$(echo $NEARBY_RESPONSE | grep -o "id" | wc -l)
-echo -e "\nFound $RESOURCE_COUNT resources nearby"
+# Get reports for disaster
+test_endpoint "GET" "/disasters/$DISASTER_ID/reports" "" "200" "Get disaster reports"
 
-if [ $RESOURCE_COUNT -gt 0 ]; then
-  echo -e "${GREEN}✓ Resources found successfully${NC}"
-else
-  echo -e "${RED}✗ No resources found${NC}"
-fi 
+# Test Social Media Endpoints
+echo -e "\n📱 Testing Social Media Endpoints"
+
+# Get social media updates
+test_endpoint "GET" "/disasters/$DISASTER_ID/social-media" "" "200" "Get social media updates"
+
+# Test Image Verification
+echo -e "\n🖼️ Testing Image Verification"
+
+# Verify image
+IMAGE_DATA='{
+    "image_url": "https://example.com/flood.jpg"
+}'
+test_endpoint "POST" "/disasters/$DISASTER_ID/verify-image" "$IMAGE_DATA" "200" "Verify image"
+
+# Test Official Updates
+echo -e "\n📢 Testing Official Updates"
+
+# Get official updates
+test_endpoint "GET" "/disasters/$DISASTER_ID/official-updates" "" "200" "Get official updates"
+
+# Cleanup
+echo -e "\n🧹 Cleaning up test data"
+
+# Delete the test disaster
+test_endpoint "DELETE" "/disasters/$DISASTER_ID" "" "200" "Delete disaster"
+
+echo -e "\n✅ All tests completed successfully!" 
