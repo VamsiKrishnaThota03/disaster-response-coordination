@@ -7,11 +7,21 @@ import { BACKEND_URL, SOCKET_CONFIG } from './config';
 
 let socket;
 
-try {
-  socket = io(BACKEND_URL, SOCKET_CONFIG);
-} catch (error) {
-  console.error('Socket initialization error:', error);
-}
+const initializeSocket = () => {
+  try {
+    if (socket) {
+      socket.close();
+    }
+    
+    console.log('Initializing socket with URL:', BACKEND_URL);
+    socket = io(BACKEND_URL, SOCKET_CONFIG);
+    
+    return socket;
+  } catch (error) {
+    console.error('Socket initialization error:', error);
+    return null;
+  }
+};
 
 function App() {
   const [disasters, setDisasters] = useState([]);
@@ -20,12 +30,12 @@ function App() {
   const toast = useToast();
 
   useEffect(() => {
-    // Fetch initial disasters
-    fetchDisasters();
-
+    // Initialize socket connection
+    const socket = initializeSocket();
+    
     if (socket) {
-      // Socket.io event listeners
       socket.on('connect', () => {
+        console.log('Socket connected successfully');
         setIsConnected(true);
         toast({
           title: 'Connected to server',
@@ -35,11 +45,24 @@ function App() {
         });
       });
 
-      socket.on('disconnect', () => {
+      socket.on('connect_error', (error) => {
+        console.error('Socket connection error:', error);
+        setIsConnected(false);
+        toast({
+          title: 'Connection Error',
+          description: 'Failed to connect to server: ' + error.message,
+          status: 'error',
+          duration: null,
+          isClosable: true,
+        });
+      });
+
+      socket.on('disconnect', (reason) => {
+        console.log('Socket disconnected:', reason);
         setIsConnected(false);
         toast({
           title: 'Disconnected from server',
-          description: 'Attempting to reconnect...',
+          description: `Reason: ${reason}. Attempting to reconnect...`,
           status: 'warning',
           duration: null,
           isClosable: true,
@@ -47,15 +70,23 @@ function App() {
       });
 
       socket.on('disaster_updated', () => {
+        console.log('Disaster updated event received');
         fetchDisasters();
       });
+    }
 
-      return () => {
+    // Fetch initial disasters
+    fetchDisasters();
+
+    return () => {
+      if (socket) {
         socket.off('connect');
+        socket.off('connect_error');
         socket.off('disconnect');
         socket.off('disaster_updated');
-      };
-    }
+        socket.close();
+      }
+    };
   }, []);
 
   const fetchDisasters = async () => {
