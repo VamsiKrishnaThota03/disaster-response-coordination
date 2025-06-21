@@ -2,26 +2,8 @@ import { Container, VStack, Heading, useToast, Button, Box, useDisclosure, Badge
 import { useState, useEffect } from 'react';
 import DisasterForm from './components/DisasterForm';
 import DisasterList from './components/DisasterList';
-import io from 'socket.io-client';
-import { BACKEND_URL, SOCKET_CONFIG } from './config';
-
-let socket;
-
-const initializeSocket = () => {
-  try {
-    if (socket) {
-      socket.close();
-    }
-    
-    console.log('Initializing socket with URL:', BACKEND_URL);
-    socket = io(BACKEND_URL, SOCKET_CONFIG);
-    
-    return socket;
-  } catch (error) {
-    console.error('Socket initialization error:', error);
-    return null;
-  }
-};
+import { BACKEND_URL } from './config';
+import socketService from './services/socketService';
 
 function App() {
   const [disasters, setDisasters] = useState([]);
@@ -31,61 +13,56 @@ function App() {
 
   useEffect(() => {
     // Initialize socket connection
-    const socket = initializeSocket();
+    const socket = socketService.connect();
     
-    if (socket) {
-      socket.on('connect', () => {
-        console.log('Socket connected successfully');
-        setIsConnected(true);
-        toast({
-          title: 'Connected to server',
-          status: 'success',
-          duration: 3000,
-          isClosable: true,
-        });
+    // Socket event listeners
+    socketService.addListener('connect', () => {
+      setIsConnected(true);
+      toast({
+        title: 'Connected to server',
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
       });
+    });
 
-      socket.on('connect_error', (error) => {
-        console.error('Socket connection error:', error);
-        setIsConnected(false);
-        toast({
-          title: 'Connection Error',
-          description: 'Failed to connect to server: ' + error.message,
-          status: 'error',
-          duration: null,
-          isClosable: true,
-        });
+    socketService.addListener('connect_error', (error) => {
+      setIsConnected(false);
+      toast({
+        title: 'Connection Error',
+        description: 'Failed to connect to server: ' + error.message,
+        status: 'error',
+        duration: null,
+        isClosable: true,
       });
+    });
 
-      socket.on('disconnect', (reason) => {
-        console.log('Socket disconnected:', reason);
-        setIsConnected(false);
-        toast({
-          title: 'Disconnected from server',
-          description: `Reason: ${reason}. Attempting to reconnect...`,
-          status: 'warning',
-          duration: null,
-          isClosable: true,
-        });
+    socketService.addListener('disconnect', (reason) => {
+      setIsConnected(false);
+      toast({
+        title: 'Disconnected from server',
+        description: `Reason: ${reason}. Attempting to reconnect...`,
+        status: 'warning',
+        duration: null,
+        isClosable: true,
       });
+    });
 
-      socket.on('disaster_updated', () => {
-        console.log('Disaster updated event received');
-        fetchDisasters();
-      });
-    }
+    socketService.addListener('disaster_updated', () => {
+      console.log('Disaster updated event received');
+      fetchDisasters();
+    });
 
     // Fetch initial disasters
     fetchDisasters();
 
+    // Cleanup
     return () => {
-      if (socket) {
-        socket.off('connect');
-        socket.off('connect_error');
-        socket.off('disconnect');
-        socket.off('disaster_updated');
-        socket.close();
-      }
+      socketService.removeAllListeners('connect');
+      socketService.removeAllListeners('connect_error');
+      socketService.removeAllListeners('disconnect');
+      socketService.removeAllListeners('disaster_updated');
+      socketService.disconnect();
     };
   }, []);
 

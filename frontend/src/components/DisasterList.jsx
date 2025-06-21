@@ -32,15 +32,12 @@ import {
 } from '@chakra-ui/react';
 import { FaMapMarkerAlt, FaExclamationCircle, FaFileAlt, FaPlus, FaHandHoldingHeart } from 'react-icons/fa';
 import { MdAccessTime, MdPriorityHigh } from 'react-icons/md';
-import io from 'socket.io-client';
 import ReportForm from './ReportForm';
 import Reports from './Reports';
 import ResourceForm from './ResourceForm';
 import MapView from './MapView';
 import OfficialUpdates from './OfficialUpdates';
-
-const BACKEND_URL = 'http://localhost:3001';
-const socket = io(BACKEND_URL);
+import { BACKEND_URL } from '../config';
 
 // Utility function for determining priority color
 const getPriorityColor = (priority) => {
