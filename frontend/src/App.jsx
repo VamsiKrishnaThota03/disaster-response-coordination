@@ -3,20 +3,12 @@ import { useState, useEffect } from 'react';
 import DisasterForm from './components/DisasterForm';
 import DisasterList from './components/DisasterList';
 import io from 'socket.io-client';
+import { BACKEND_URL, SOCKET_CONFIG } from './config';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 let socket;
 
 try {
-  socket = io(BACKEND_URL, {
-    reconnectionDelay: 1000,
-    reconnection: true,
-    reconnectionAttempts: 10,
-    transports: ['websocket'],
-    agent: false,
-    upgrade: false,
-    rejectUnauthorized: false
-  });
+  socket = io(BACKEND_URL, SOCKET_CONFIG);
 } catch (error) {
   console.error('Socket initialization error:', error);
 }
@@ -68,6 +60,7 @@ function App() {
 
   const fetchDisasters = async () => {
     try {
+      console.log('Fetching from:', `${BACKEND_URL}/api/disasters`);
       const response = await fetch(`${BACKEND_URL}/api/disasters`);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);

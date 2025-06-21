@@ -13,8 +13,7 @@ import {
   AlertDescription,
   useColorModeValue,
 } from '@chakra-ui/react';
-
-const BACKEND_URL = 'http://localhost:3001';
+import { BACKEND_URL } from '../config';
 
 const DisasterForm = ({ onDisasterCreated }) => {
   const [formData, setFormData] = useState({

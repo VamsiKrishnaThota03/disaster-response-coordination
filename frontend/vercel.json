@@ -24,5 +24,10 @@
   ],
   "env": {
     "VITE_BACKEND_URL": "https://disaster-response-coordination.onrender.com"
+  },
+  "build": {
+    "env": {
+      "VITE_BACKEND_URL": "https://disaster-response-coordination.onrender.com"
+    }
   }
 } 
