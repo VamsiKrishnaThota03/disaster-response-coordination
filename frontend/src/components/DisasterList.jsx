@@ -38,6 +38,7 @@ import ResourceForm from './ResourceForm';
 import MapView from './MapView';
 import OfficialUpdates from './OfficialUpdates';
 import { BACKEND_URL } from '../config';
+import socketService from '../services/socketService';
 
 // Utility function for determining priority color
 const getPriorityColor = (priority) => {
@@ -304,21 +305,26 @@ const DisasterList = ({ disasters }) => {
   const tagBg = useColorModeValue('blue.50', 'blue.900');
 
   useEffect(() => {
-    socket.on('social_media_updated', (disasterId) => {
+    // Get socket instance
+    const socket = socketService.getSocket();
+
+    // Add event listeners
+    socketService.addListener('social_media_updated', (disasterId) => {
       if (selectedDisaster?.id === disasterId) {
         fetchSocialMediaPosts(disasterId);
       }
     });
 
-    socket.on('report_created', ({ disaster_id }) => {
+    socketService.addListener('report_created', ({ disaster_id }) => {
       if (selectedDisaster?.id === disaster_id) {
         fetchSocialMediaPosts(disaster_id);
       }
     });
 
+    // Cleanup
     return () => {
-      socket.off('social_media_updated');
-      socket.off('report_created');
+      socketService.removeAllListeners('social_media_updated');
+      socketService.removeAllListeners('report_created');
     };
   }, [selectedDisaster]);
 
