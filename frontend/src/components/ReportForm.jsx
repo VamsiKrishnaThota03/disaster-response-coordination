@@ -17,10 +17,10 @@ import {
   Text,
   Badge,
   HStack,
+  Icon,
 } from '@chakra-ui/react';
-import { FaImage, FaFileAlt, FaExclamationTriangle } from 'react-icons/fa';
-
-const BACKEND_URL = 'http://localhost:3001';
+import { FaImage, FaFileAlt, FaExclamationTriangle, FaCheckCircle, FaTimesCircle, FaHourglassHalf } from 'react-icons/fa';
+import { BACKEND_URL } from '../config';
 
 const ReportForm = ({ disasterId, onReportSubmitted }) => {
   const [formData, setFormData] = useState({

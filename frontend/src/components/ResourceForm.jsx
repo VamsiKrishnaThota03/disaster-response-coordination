@@ -21,8 +21,7 @@ import {
   useColorModeValue,
 } from '@chakra-ui/react';
 import { FaMapMarkerAlt, FaBuilding, FaTag, FaMapPin } from 'react-icons/fa';
-
-const BACKEND_URL = 'http://localhost:3001';
+import { BACKEND_URL } from '../config';
 
 const ResourceForm = ({ disasterId, onResourceCreated }) => {
   const [formData, setFormData] = useState({
