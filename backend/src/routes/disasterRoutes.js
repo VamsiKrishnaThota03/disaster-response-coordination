@@ -4,6 +4,7 @@ import geminiService from '../services/geminiService.js';
 import supabaseService from '../services/supabaseService.js';
 import geocodingService from '../services/geocodingService.js';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
+import { officialUpdatesService } from '../services/officialUpdatesService.js';
 
 const router = express.Router();
 
@@ -301,6 +302,29 @@ router.post('/:id/reports', rateLimitMiddleware, async (req, res) => {
       error: 'Failed to create report',
       details: error.message,
       code: error.code
+    });
+  }
+});
+
+// Get official updates for a disaster
+router.get('/:id/official-updates', rateLimitMiddleware, async (req, res) => {
+  try {
+    const disasterId = req.params.id;
+
+    // Verify disaster exists
+    const disaster = await supabaseService.getDisasterById(disasterId);
+    if (!disaster) {
+      return res.status(404).json({ error: 'Disaster not found' });
+    }
+
+    // Get official updates from service
+    const updates = await officialUpdatesService.fetchUpdates(disasterId, disaster.location_name);
+    res.json(updates);
+  } catch (error) {
+    logger.error('Error fetching official updates:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch official updates',
+      details: error.message
     });
   }
 });

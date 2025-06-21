@@ -4,6 +4,7 @@ import {
   Button,
   FormControl,
   FormLabel,
+  FormHelperText,
   Input,
   Textarea,
   VStack,
@@ -12,12 +13,8 @@ import {
   AlertIcon,
   AlertDescription,
   useColorModeValue,
-  FormHelperText,
-  InputGroup,
-  InputLeftElement,
-  Icon,
+  Spinner,
   Text,
-  Divider,
   Badge,
   HStack,
 } from '@chakra-ui/react';
@@ -32,6 +29,8 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [imageVerification, setImageVerification] = useState(null);
+  const [isVerifying, setIsVerifying] = useState(false);
   const [wordCount, setWordCount] = useState(0);
   const toast = useToast();
 
@@ -54,11 +53,10 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
         throw new Error('Report content is required');
       }
 
-      if (formData.image_url && !isValidUrl(formData.image_url)) {
-        throw new Error('Invalid image URL');
+      // If image URL is provided but not verified, verify it first
+      if (formData.image_url && !imageVerification) {
+        await verifyImage();
       }
-
-      const priority = getContentPriority(formData.content);
 
       const response = await fetch(`${BACKEND_URL}/api/disasters/${disasterId}/reports`, {
         method: 'POST',
@@ -67,7 +65,8 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
         },
         body: JSON.stringify({
           ...formData,
-          priority,
+          verification_status: imageVerification?.status || 'pending',
+          priority: getContentPriority(formData.content),
         }),
       });
 
@@ -86,6 +85,7 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
       });
 
       setFormData({ content: '', image_url: '' });
+      setImageVerification(null);
       onReportSubmitted();
     } catch (error) {
       setError(error.message);
@@ -101,6 +101,58 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
     }
   };
 
+  const verifyImage = async () => {
+    if (!formData.image_url || !isValidUrl(formData.image_url)) {
+      toast({
+        title: 'Invalid Image URL',
+        description: 'Please provide a valid image URL',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    setIsVerifying(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/disasters/${disasterId}/verify-image`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image_url: formData.image_url,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to verify image');
+      }
+
+      setImageVerification(data);
+      
+      toast({
+        title: 'Image Verified',
+        description: `Status: ${data.status} (${data.confidence})`,
+        status: data.status === 'VERIFIED' ? 'success' : 'warning',
+        duration: 5000,
+        isClosable: true,
+      });
+    } catch (error) {
+      toast({
+        title: 'Verification Error',
+        description: error.message,
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -110,6 +162,11 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
 
     if (name === 'content') {
       setWordCount(value.trim().split(/\s+/).filter(Boolean).length);
+    }
+
+    // Reset image verification when URL changes
+    if (name === 'image_url') {
+      setImageVerification(null);
     }
   };
 
@@ -126,10 +183,19 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
     const lowercaseContent = content.toLowerCase();
     if (lowercaseContent.includes('urgent') || 
         lowercaseContent.includes('emergency') || 
-        lowercaseContent.includes('immediate')) {
+        lowercaseContent.includes('critical')) {
       return 'high';
     }
     return 'normal';
+  };
+
+  const getVerificationBadgeColor = (status) => {
+    switch (status?.toUpperCase()) {
+      case 'VERIFIED': return 'green';
+      case 'SUSPICIOUS': return 'orange';
+      case 'UNVERIFIED': return 'red';
+      default: return 'gray';
+    }
   };
 
   return (
@@ -156,7 +222,7 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
             name="content"
             value={formData.content}
             onChange={handleChange}
-            placeholder="Describe the situation or provide updates..."
+            placeholder="Describe the situation or provide updates"
             rows={4}
             bg={inputBg}
             color={inputColor}
@@ -193,19 +259,14 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
           </HStack>
         </FormControl>
 
-        <Divider />
-
         <FormControl>
-          <FormLabel color={labelColor}>Image URL (Optional)</FormLabel>
-          <InputGroup>
-            <InputLeftElement>
-              <Icon as={FaImage} color="gray.500" />
-            </InputLeftElement>
+          <FormLabel color={labelColor}>Image URL</FormLabel>
+          <HStack>
             <Input
               name="image_url"
               value={formData.image_url}
               onChange={handleChange}
-              placeholder="Enter URL of related image"
+              placeholder="Enter URL of the image"
               bg={inputBg}
               color={inputColor}
               borderColor={borderColor}
@@ -216,10 +277,34 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
                 boxShadow: '0 0 0 1px var(--chakra-colors-blue-500)'
               }}
             />
-          </InputGroup>
-          <FormHelperText>
-            Add an image URL to provide visual context
-          </FormHelperText>
+            <Button
+              onClick={verifyImage}
+              isLoading={isVerifying}
+              loadingText="Verifying"
+              colorScheme="blue"
+              size="md"
+              isDisabled={!formData.image_url || !isValidUrl(formData.image_url)}
+            >
+              Verify
+            </Button>
+          </HStack>
+          {imageVerification && (
+            <Box mt={2}>
+              <Badge 
+                colorScheme={getVerificationBadgeColor(imageVerification.status)}
+                px={2}
+                py={1}
+                borderRadius="full"
+              >
+                {imageVerification.status} ({imageVerification.confidence})
+              </Badge>
+              {imageVerification.analysis && (
+                <Text fontSize="sm" color="gray.400" mt={1}>
+                  {imageVerification.analysis}
+                </Text>
+              )}
+            </Box>
+          )}
         </FormControl>
 
         <Button

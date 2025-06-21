@@ -72,21 +72,35 @@ class MockSocialMediaService {
     return { userId, type: userType.id };
   }
 
-  // Analyze text for priority based on keywords
+  // Enhanced priority analysis
   #analyzePriority(text) {
     const lowercaseText = text.toLowerCase();
+    let score = 0;
     
-    // Check for high priority keywords first
+    // Check for high priority keywords (3 points each)
     for (const keyword of this.priorityKeywords.high) {
-      if (lowercaseText.includes(keyword)) return 'high';
+      if (lowercaseText.includes(keyword)) score += 3;
     }
     
-    // Then medium priority
+    // Check for medium priority keywords (2 points each)
     for (const keyword of this.priorityKeywords.medium) {
-      if (lowercaseText.includes(keyword)) return 'medium';
+      if (lowercaseText.includes(keyword)) score += 2;
     }
     
-    // Default to low priority
+    // Check for low priority keywords (1 point each)
+    for (const keyword of this.priorityKeywords.low) {
+      if (lowercaseText.includes(keyword)) score += 1;
+    }
+
+    // Additional context-based scoring
+    if (text.includes('!')) score += 1;
+    if (text.includes('!!')) score += 2;
+    if (text.match(/\b\d+\s*(people|injured|trapped|dead|casualties)\b/i)) score += 3;
+    if (text.match(/\b(children|elderly|disabled)\b/i)) score += 2;
+    
+    // Determine priority based on score
+    if (score >= 5) return 'high';
+    if (score >= 3) return 'medium';
     return 'low';
   }
 
@@ -151,7 +165,7 @@ class MockSocialMediaService {
       return savedPost;
     } catch (error) {
       logger.error('Error storing social media post:', error);
-      return post; // Return the post even if storage fails
+      return post;
     }
   }
 

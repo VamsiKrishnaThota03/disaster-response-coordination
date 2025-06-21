@@ -28,6 +28,7 @@ import {
   Icon,
   Flex,
   useColorModeValue,
+  Spinner,
 } from '@chakra-ui/react';
 import { FaMapMarkerAlt, FaExclamationCircle, FaFileAlt, FaPlus, FaHandHoldingHeart } from 'react-icons/fa';
 import { MdAccessTime, MdPriorityHigh } from 'react-icons/md';
@@ -35,6 +36,8 @@ import io from 'socket.io-client';
 import ReportForm from './ReportForm';
 import Reports from './Reports';
 import ResourceForm from './ResourceForm';
+import MapView from './MapView';
+import OfficialUpdates from './OfficialUpdates';
 
 const BACKEND_URL = 'http://localhost:3001';
 const socket = io(BACKEND_URL);
@@ -57,11 +60,6 @@ const DisasterCard = ({ disaster, onClick, onReportClick }) => {
   const descriptionColor = useColorModeValue('gray.400', 'gray.400');
   const metaColor = useColorModeValue('gray.500', 'gray.500');
 
-  const handleCardClick = (e) => {
-    e.stopPropagation();
-    onClick(disaster);
-  };
-
   return (
     <Box
       borderWidth="1px"
@@ -79,7 +77,8 @@ const DisasterCard = ({ disaster, onClick, onReportClick }) => {
       display="flex"
       flexDirection="column"
       maxW="280px"
-      onClick={handleCardClick}
+      cursor="pointer"
+      onClick={onClick}
     >
       <Box p={4} flex="1" display="flex" flexDirection="column">
         <Flex justify="space-between" align="center" mb={3}>
@@ -170,7 +169,10 @@ const DisasterCard = ({ disaster, onClick, onReportClick }) => {
             variant="solid"
             size="xs"
             flex="1"
-            onClick={handleCardClick}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick(disaster);
+            }}
           >
             View Details
           </Button>
@@ -183,10 +185,6 @@ const DisasterCard = ({ disaster, onClick, onReportClick }) => {
             onClick={(e) => {
               e.stopPropagation();
               onReportClick(disaster);
-            }}
-            _hover={{
-              bg: 'orange.900',
-              borderColor: 'orange.500'
             }}
           >
             Submit Report
@@ -299,6 +297,7 @@ const DisasterList = ({ disasters }) => {
   const [selectedDisaster, setSelectedDisaster] = useState(null);
   const [socialMediaPosts, setSocialMediaPosts] = useState([]);
   const [nearbyResources, setNearbyResources] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [showReportForm, setShowReportForm] = useState(false);
   const [showResourceForm, setShowResourceForm] = useState(false);
@@ -329,10 +328,14 @@ const DisasterList = ({ disasters }) => {
   const fetchSocialMediaPosts = async (disasterId) => {
     try {
       const response = await fetch(`${BACKEND_URL}/api/social-media/disaster/${disasterId}`);
+      if (!response.ok) throw new Error('Failed to fetch social media posts');
       const data = await response.json();
       setSocialMediaPosts(data);
+      return data;
     } catch (error) {
       console.error('Error fetching social media posts:', error);
+      setSocialMediaPosts([]);
+      throw error;
     }
   };
 
@@ -341,24 +344,36 @@ const DisasterList = ({ disasters }) => {
       const response = await fetch(
         `${BACKEND_URL}/api/disasters/${disasterId}/resources?radius=5000`
       );
+      if (!response.ok) throw new Error('Failed to fetch nearby resources');
       const data = await response.json();
       setNearbyResources(data);
+      return data;
     } catch (error) {
       console.error('Error fetching nearby resources:', error);
       setNearbyResources([]);
+      throw error;
     }
   };
 
   const handleDisasterClick = async (disaster) => {
-    setSelectedDisaster(disaster);
-    setShowReportForm(false);
-    setShowResourceForm(false);
-    
-    await Promise.all([
-      fetchSocialMediaPosts(disaster.id),
-      fetchNearbyResources(disaster.id)
-    ]);
-    onOpen();
+    try {
+      setIsLoading(true);
+      setSelectedDisaster(disaster);
+      setShowReportForm(false);
+      setShowResourceForm(false);
+      
+      await Promise.all([
+        fetchSocialMediaPosts(disaster.id),
+        fetchNearbyResources(disaster.id)
+      ]);
+
+      onOpen();
+    } catch (error) {
+      console.error('Error loading disaster details:', error);
+      // Show error toast or handle error appropriately
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleReportSubmitted = () => {
@@ -392,7 +407,7 @@ const DisasterList = ({ disasters }) => {
             <DisasterCard
               key={disaster.id}
               disaster={disaster}
-              onClick={() => handleDisasterClick(disaster)}
+              onClick={handleDisasterClick}
               onReportClick={() => {
                 setSelectedDisaster(disaster);
                 setShowReportForm(true);
@@ -435,222 +450,274 @@ const DisasterList = ({ disasters }) => {
           bg="gray.800"
           borderColor="gray.700"
         >
-          <ModalHeader borderBottomWidth="1px" py={3} borderBottomColor="gray.700">
-            <HStack justify="space-between" align="flex-start">
-              <VStack align="flex-start" spacing={2}>
-                <Heading size="md">{selectedDisaster?.title}</Heading>
-                <HStack>
-                  <Badge 
-                    colorScheme={getPriorityColor(selectedDisaster?.priority)}
-                    fontSize="xs"
-                    px={2}
-                    py={0.5}
-                    borderRadius="full"
-                  >
-                    <HStack spacing={1}>
-                      <Icon as={MdPriorityHigh} boxSize="3" />
-                      <Text fontSize="xs">{selectedDisaster?.priority?.toUpperCase() || 'UNKNOWN'} PRIORITY</Text>
+          {isLoading ? (
+            <Box p={8} textAlign="center">
+              <Spinner size="xl" color="blue.500" />
+              <Text mt={4} color="gray.400">Loading disaster details...</Text>
+            </Box>
+          ) : (
+            <>
+              <ModalHeader borderBottomWidth="1px" py={3} borderBottomColor="gray.700">
+                <HStack justify="space-between" align="flex-start">
+                  <VStack align="flex-start" spacing={2}>
+                    <Heading size="md">{selectedDisaster?.title}</Heading>
+                    <HStack>
+                      <Badge 
+                        colorScheme={getPriorityColor(selectedDisaster?.priority)}
+                        fontSize="xs"
+                        px={2}
+                        py={0.5}
+                        borderRadius="full"
+                      >
+                        <HStack spacing={1}>
+                          <Icon as={MdPriorityHigh} boxSize="3" />
+                          <Text fontSize="xs">{selectedDisaster?.priority?.toUpperCase() || 'UNKNOWN'} PRIORITY</Text>
+                        </HStack>
+                      </Badge>
+                      <Badge 
+                        colorScheme={selectedDisaster?.status === 'active' ? 'green' : 'gray'}
+                        variant="subtle"
+                        borderRadius="full"
+                        fontSize="xs"
+                      >
+                        {selectedDisaster?.status?.toUpperCase()}
+                      </Badge>
                     </HStack>
-                  </Badge>
-                  <Badge 
-                    colorScheme={selectedDisaster?.status === 'active' ? 'green' : 'gray'}
-                    variant="subtle"
-                    borderRadius="full"
-                    fontSize="xs"
-                  >
-                    {selectedDisaster?.status?.toUpperCase()}
-                  </Badge>
-                </HStack>
-              </VStack>
-              {!showReportForm && !showResourceForm && (
-                <HStack spacing={2}>
-                  <Button
-                    leftIcon={<FaFileAlt />}
-                    colorScheme="orange"
-                    size="sm"
-                    onClick={() => setShowReportForm(true)}
-                  >
-                    Submit Report
-                  </Button>
-                  <Button
-                    leftIcon={<FaHandHoldingHeart />}
-                    colorScheme="green"
-                    size="sm"
-                    onClick={() => setShowResourceForm(true)}
-                  >
-                    Add Resource
-                  </Button>
-                </HStack>
-              )}
-            </HStack>
-          </ModalHeader>
-          <ModalCloseButton />
-          <ModalBody py={4}>
-            <VStack spacing={4} align="stretch">
-              {showReportForm ? (
-                <>
-                  <Heading size="sm" mb={2}>Submit New Report</Heading>
-                  <ReportForm 
-                    disasterId={selectedDisaster?.id} 
-                    onReportSubmitted={handleReportSubmitted}
-                  />
-                  <Button 
-                    size="sm" 
-                    onClick={() => setShowReportForm(false)}
-                    variant="ghost"
-                    color="white"
-                    _hover={{
-                      bg: 'gray.700'
-                    }}
-                  >
-                    Back to Details
-                  </Button>
-                </>
-              ) : showResourceForm ? (
-                <>
-                  <Heading size="sm" mb={2}>Add New Resource</Heading>
-                  <ResourceForm 
-                    disasterId={selectedDisaster?.id} 
-                    onResourceCreated={handleResourceCreated}
-                  />
-                  <Button 
-                    size="sm" 
-                    onClick={() => setShowResourceForm(false)}
-                    variant="ghost"
-                    color="white"
-                    _hover={{
-                      bg: 'gray.700'
-                    }}
-                  >
-                    Back to Details
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Box>
-                    <Text color="gray.600" fontSize="sm" whiteSpace="pre-wrap">
-                      {selectedDisaster?.description}
-                    </Text>
-                    <HStack mt={3} color="gray.500">
-                      <Icon as={FaMapMarkerAlt} boxSize="3" />
-                      <Text fontSize="sm">{selectedDisaster?.location_name}</Text>
+                  </VStack>
+                  {!showReportForm && !showResourceForm && (
+                    <HStack spacing={2}>
+                      <Button
+                        leftIcon={<FaFileAlt />}
+                        colorScheme="orange"
+                        size="sm"
+                        onClick={() => setShowReportForm(true)}
+                      >
+                        Submit Report
+                      </Button>
+                      <Button
+                        leftIcon={<FaHandHoldingHeart />}
+                        colorScheme="green"
+                        size="sm"
+                        onClick={() => setShowResourceForm(true)}
+                      >
+                        Add Resource
+                      </Button>
                     </HStack>
-                    {selectedDisaster?.tags && selectedDisaster.tags.length > 0 && (
-                      <Wrap spacing={2} mt={3}>
-                        {selectedDisaster.tags.map((tag, index) => (
-                          <WrapItem key={index}>
-                            <Tag 
-                              size="sm" 
-                              bg={tagBg}
-                              color="blue.600"
-                              borderRadius="full"
-                              px={2}
-                              py={0.5}
-                              fontSize="xs"
-                            >
-                              {tag}
-                            </Tag>
-                          </WrapItem>
-                        ))}
-                      </Wrap>
-                    )}
-                  </Box>
-
-                  <Divider />
-
-                  <Accordion defaultIndex={[0]} allowMultiple>
-                    <AccordionItem border="none">
-                      <AccordionButton 
-                        px={3} 
-                        py={2}
-                        bg="gray.800"
-                        _hover={{ bg: 'gray.700' }}
-                        borderRadius="md"
+                  )}
+                </HStack>
+              </ModalHeader>
+              <ModalCloseButton />
+              <ModalBody py={4}>
+                <VStack spacing={4} align="stretch">
+                  {showReportForm ? (
+                    <>
+                      <Heading size="sm" mb={2}>Submit New Report</Heading>
+                      <ReportForm 
+                        disasterId={selectedDisaster?.id} 
+                        onReportSubmitted={handleReportSubmitted}
+                      />
+                      <Button 
+                        size="sm" 
+                        onClick={() => setShowReportForm(false)}
+                        variant="ghost"
+                        color="white"
+                        _hover={{
+                          bg: 'gray.700'
+                        }}
                       >
-                        <Box flex="1" textAlign="left">
-                          <Heading size="sm" color="white">Social Media Updates</Heading>
-                        </Box>
-                        <AccordionIcon color="gray.400" />
-                      </AccordionButton>
-                      <AccordionPanel pt={3}>
-                        <VStack spacing={4} align="stretch">
-                          {socialMediaPosts.length > 0 ? (
-                            socialMediaPosts.map((post) => (
-                              <SocialMediaPost key={post.id} post={post} />
-                            ))
-                          ) : (
-                            <Text color="gray.500" textAlign="center" py={4}>
-                              No social media updates available
-                            </Text>
-                          )}
-                        </VStack>
-                      </AccordionPanel>
-                    </AccordionItem>
-
-                    <AccordionItem border="none" mt={4}>
-                      <AccordionButton 
-                        px={4} 
-                        py={3}
-                        bg="gray.800"
-                        _hover={{ bg: 'gray.700' }}
-                        borderRadius="md"
+                        Back to Details
+                      </Button>
+                    </>
+                  ) : showResourceForm ? (
+                    <>
+                      <Heading size="sm" mb={2}>Add New Resource</Heading>
+                      <ResourceForm 
+                        disasterId={selectedDisaster?.id} 
+                        onResourceCreated={handleResourceCreated}
+                      />
+                      <Button 
+                        size="sm" 
+                        onClick={() => setShowResourceForm(false)}
+                        variant="ghost"
+                        color="white"
+                        _hover={{
+                          bg: 'gray.700'
+                        }}
                       >
-                        <Box flex="1" textAlign="left">
-                          <HStack>
-                            <Heading size="sm" color="white">Nearby Resources</Heading>
-                            <Button
-                              size="xs"
-                              colorScheme="green"
-                              leftIcon={<FaPlus />}
-                              ml={2}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setShowResourceForm(true);
-                              }}
-                            >
-                              Add
-                            </Button>
-                          </HStack>
-                        </Box>
-                        <AccordionIcon color="gray.400" />
-                      </AccordionButton>
-                      <AccordionPanel pt={4}>
-                        <SimpleGrid columns={{ base: 1, md: 2 }} spacing={4}>
-                          {nearbyResources.length > 0 ? (
-                            nearbyResources.map((resource) => (
-                              <ResourceCard key={resource.id} resource={resource} />
-                            ))
-                          ) : (
-                            <Text color="gray.500" textAlign="center" py={4}>
-                              No nearby resources found
-                            </Text>
-                          )}
-                        </SimpleGrid>
-                      </AccordionPanel>
-                    </AccordionItem>
+                        Back to Details
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Box>
+                        <Text color="gray.600" fontSize="sm" whiteSpace="pre-wrap">
+                          {selectedDisaster?.description}
+                        </Text>
+                        <HStack mt={3} color="gray.500">
+                          <Icon as={FaMapMarkerAlt} boxSize="3" />
+                          <Text fontSize="sm">{selectedDisaster?.location_name}</Text>
+                        </HStack>
+                        {selectedDisaster?.tags && selectedDisaster.tags.length > 0 && (
+                          <Wrap spacing={2} mt={3}>
+                            {selectedDisaster.tags.map((tag, index) => (
+                              <WrapItem key={index}>
+                                <Tag 
+                                  size="sm" 
+                                  bg={tagBg}
+                                  color="blue.600"
+                                  borderRadius="full"
+                                  px={2}
+                                  py={0.5}
+                                  fontSize="xs"
+                                >
+                                  {tag}
+                                </Tag>
+                              </WrapItem>
+                            ))}
+                          </Wrap>
+                        )}
+                      </Box>
 
-                    <AccordionItem border="none" mt={4}>
-                      <AccordionButton 
-                        px={4} 
-                        py={3}
-                        bg="gray.800"
-                        _hover={{ bg: 'gray.700' }}
-                        borderRadius="md"
-                      >
-                        <Box flex="1" textAlign="left">
-                          <Heading size="sm" color="white">Reports and Updates</Heading>
-                        </Box>
-                        <AccordionIcon color="gray.400" />
-                      </AccordionButton>
-                      <AccordionPanel pt={4}>
-                        <Reports disasterId={selectedDisaster?.id} />
-                      </AccordionPanel>
-                    </AccordionItem>
-                  </Accordion>
-                </>
-              )}
-            </VStack>
-          </ModalBody>
+                      <Divider />
+
+                      <Accordion defaultIndex={[0]} allowMultiple>
+                        <AccordionItem border="none">
+                          <AccordionButton 
+                            px={3} 
+                            py={2}
+                            bg="gray.800"
+                            _hover={{ bg: 'gray.700' }}
+                            borderRadius="md"
+                          >
+                            <Box flex="1" textAlign="left">
+                              <Heading size="sm" color="white">Social Media Updates</Heading>
+                            </Box>
+                            <AccordionIcon color="gray.400" />
+                          </AccordionButton>
+                          <AccordionPanel pt={3}>
+                            <VStack spacing={4} align="stretch">
+                              {socialMediaPosts.length > 0 ? (
+                                socialMediaPosts.map((post) => (
+                                  <SocialMediaPost key={post.id} post={post} />
+                                ))
+                              ) : (
+                                <Text color="gray.500" textAlign="center" py={4}>
+                                  No social media updates available
+                                </Text>
+                              )}
+                            </VStack>
+                          </AccordionPanel>
+                        </AccordionItem>
+
+                        <AccordionItem border="none" mt={4}>
+                          <AccordionButton 
+                            px={4} 
+                            py={3}
+                            bg="gray.800"
+                            _hover={{ bg: 'gray.700' }}
+                            borderRadius="md"
+                          >
+                            <Box flex="1" textAlign="left">
+                              <HStack>
+                                <Heading size="sm" color="white">Nearby Resources</Heading>
+                                <Button
+                                  size="xs"
+                                  colorScheme="green"
+                                  leftIcon={<FaPlus />}
+                                  ml={2}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setShowResourceForm(true);
+                                  }}
+                                >
+                                  Add
+                                </Button>
+                              </HStack>
+                            </Box>
+                            <AccordionIcon color="gray.400" />
+                          </AccordionButton>
+                          <AccordionPanel pt={4}>
+                            <SimpleGrid columns={{ base: 1, md: 2 }} spacing={4}>
+                              {nearbyResources.length > 0 ? (
+                                nearbyResources.map((resource) => (
+                                  <ResourceCard key={resource.id} resource={resource} />
+                                ))
+                              ) : (
+                                <Text color="gray.500" textAlign="center" py={4}>
+                                  No nearby resources found
+                                </Text>
+                              )}
+                            </SimpleGrid>
+                          </AccordionPanel>
+                        </AccordionItem>
+
+                        <AccordionItem border="none" mt={4}>
+                          <AccordionButton 
+                            px={4} 
+                            py={3}
+                            bg="gray.800"
+                            _hover={{ bg: 'gray.700' }}
+                            borderRadius="md"
+                          >
+                            <Box flex="1" textAlign="left">
+                              <Heading size="sm" color="white">Location Map</Heading>
+                            </Box>
+                            <AccordionIcon color="gray.400" />
+                          </AccordionButton>
+                          <AccordionPanel pt={4}>
+                            <MapView 
+                              disasters={[selectedDisaster]} 
+                              resources={nearbyResources}
+                              center={selectedDisaster?.location?.coordinates ? 
+                                [selectedDisaster.location.coordinates[1], selectedDisaster.location.coordinates[0]] :
+                                undefined}
+                            />
+                          </AccordionPanel>
+                        </AccordionItem>
+
+                        <AccordionItem border="none" mt={4}>
+                          <AccordionButton 
+                            px={4} 
+                            py={3}
+                            bg="gray.800"
+                            _hover={{ bg: 'gray.700' }}
+                            borderRadius="md"
+                          >
+                            <Box flex="1" textAlign="left">
+                              <Heading size="sm" color="white">Official Updates</Heading>
+                            </Box>
+                            <AccordionIcon color="gray.400" />
+                          </AccordionButton>
+                          <AccordionPanel pt={4}>
+                            <OfficialUpdates disasterId={selectedDisaster?.id} />
+                          </AccordionPanel>
+                        </AccordionItem>
+
+                        <AccordionItem border="none" mt={4}>
+                          <AccordionButton 
+                            px={4} 
+                            py={3}
+                            bg="gray.800"
+                            _hover={{ bg: 'gray.700' }}
+                            borderRadius="md"
+                          >
+                            <Box flex="1" textAlign="left">
+                              <Heading size="sm" color="white">Reports and Updates</Heading>
+                            </Box>
+                            <AccordionIcon color="gray.400" />
+                          </AccordionButton>
+                          <AccordionPanel pt={4}>
+                            <Reports disasterId={selectedDisaster?.id} />
+                          </AccordionPanel>
+                        </AccordionItem>
+
+                      </Accordion>
+                    </>
+                  )}
+                </VStack>
+              </ModalBody>
+            </>
+          )}
         </ModalContent>
       </Modal>
     </Box>

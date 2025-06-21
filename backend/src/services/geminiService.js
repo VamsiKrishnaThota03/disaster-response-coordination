@@ -55,7 +55,7 @@ class GeminiService {
     }
   }
 
-  async retryOperation(operation, maxRetries = 3) {
+  async retryOperation(operation, maxRetries = 1) {
     let lastError;
     for (let i = 0; i < maxRetries; i++) {
       try {
@@ -64,21 +64,25 @@ class GeminiService {
         lastError = error;
         // Check if it's a rate limit error
         if (error.message && error.message.includes('429')) {
-          // Use exponential backoff with longer delays for rate limits
-          const waitTime = Math.pow(2, i + 1) * 2000; // Start with 4s, then 8s, then 16s
-          logger.warn(`Rate limit hit. Retry ${i + 1}/${maxRetries} failed. Waiting ${waitTime}ms before next attempt.`);
+          // Use a fixed short delay for rate limits
+          const waitTime = 1000; // Just wait 1 second before retry
+          logger.warn(`Rate limit hit. Retry ${i + 1}/${maxRetries}. Waiting ${waitTime}ms before next attempt.`);
           await new Promise(resolve => setTimeout(resolve, waitTime));
         } else {
-          // For other errors, use standard exponential backoff
-          const waitTime = Math.pow(2, i) * 1000;
-          logger.warn(`Retry ${i + 1}/${maxRetries} failed. Waiting ${waitTime}ms before next attempt.`);
+          // For other errors, use a short fixed delay
+          const waitTime = 500;
+          logger.warn(`Retry ${i + 1}/${maxRetries}. Waiting ${waitTime}ms before next attempt.`);
           await new Promise(resolve => setTimeout(resolve, waitTime));
         }
       }
     }
-    // If we hit rate limits, use fallback methods
-    if (lastError && lastError.message && lastError.message.includes('429')) {
-      logger.warn('Rate limit persisted, using fallback method');
+    // If we hit rate limits or max retries, use fallback methods immediately
+    if (lastError) {
+      if (lastError.message && lastError.message.includes('429')) {
+        logger.warn('Rate limit hit, using fallback method');
+      } else {
+        logger.warn('Max retries reached, using fallback method');
+      }
       return null;
     }
     throw lastError;
