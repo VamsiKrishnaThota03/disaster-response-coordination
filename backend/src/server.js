@@ -20,6 +20,7 @@ const httpServer = createServer(app);
 // Configure CORS for production
 const allowedOrigins = [
   'https://disaster-response-coordination-one.vercel.app',
+  'https://disaster-response-coordination-r86q.vercel.app',
   'http://localhost:5173'
 ];
 
@@ -28,7 +29,9 @@ const corsOptions = {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    // Check if the origin is allowed or if it matches the pattern
+    if (allowedOrigins.indexOf(origin) !== -1 || 
+        origin.match(/^https:\/\/disaster-response-coordination-.*\.vercel\.app$/)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
