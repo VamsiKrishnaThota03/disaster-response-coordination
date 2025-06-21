@@ -4,7 +4,7 @@ import DisasterForm from './components/DisasterForm';
 import DisasterList from './components/DisasterList';
 import io from 'socket.io-client';
 
-const BACKEND_URL = 'http://localhost:3001';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 let socket;
 
 try {
