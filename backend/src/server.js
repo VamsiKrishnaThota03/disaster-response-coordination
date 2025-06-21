@@ -20,7 +20,7 @@ const httpServer = createServer(app);
 // Configure CORS for production
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
-    ? [process.env.FRONTEND_URL || 'https://disaster-response-coordination.vercel.app']
+    ? [process.env.FRONTEND_URL || 'https://disaster-response-coordination-r86q.vercel.app']
     : 'http://localhost:5173',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
