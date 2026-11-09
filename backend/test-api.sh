@@ -7,7 +7,10 @@ NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
 # Base URL for the API
-BASE_URL="http://localhost:3001/api"
+# Writes need AUTH_DISABLED=true on the server, or TOKEN=<supabase access token>
+BASE_URL="${BASE_URL:-http://localhost:3001/api}"
+AUTH_HEADER=()
+if [ -n "$TOKEN" ]; then AUTH_HEADER=(-H "Authorization: Bearer $TOKEN"); fi
 
 # Function to make API calls and check responses
 test_endpoint() {
@@ -23,7 +26,7 @@ test_endpoint() {
         response=$(curl -s -w "%{http_code}" -X $method "$BASE_URL$endpoint")
     else
         response=$(curl -s -w "%{http_code}" -X $method "$BASE_URL$endpoint" \
-            -H "Content-Type: application/json" \
+            -H "Content-Type: application/json" "${AUTH_HEADER[@]}" \
             -d "$data")
     fi
 

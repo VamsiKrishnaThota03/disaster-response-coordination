@@ -3,16 +3,16 @@ services:
     name: disaster-response-backend
     env: node
     region: oregon
-    buildCommand: npm install
+    buildCommand: npm ci --omit=dev
     startCommand: npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3001
-      - key: FRONTEND_URL
-        value: https://disaster-response-coordination-r86q.vercel.app
+      - key: NODE_VERSION
+        value: "22"
+      - key: CORS_ORIGINS
+        value: https://disaster-response-coordination-one.vercel.app
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
@@ -21,4 +21,6 @@ services:
         sync: false
       - key: OPENCAGE_API_KEY
         sync: false
-    autoDeploy: true 
+      - key: ADMIN_USER_IDS
+        sync: false
+    autoDeploy: true
