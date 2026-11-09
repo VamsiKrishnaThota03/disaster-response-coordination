@@ -1,84 +1,47 @@
-import opencage from 'opencage-api-client';
-import logger from '../utils/logger.js';
 import dotenv from 'dotenv';
+import logger from '../utils/logger.js';
 
 dotenv.config();
+
+const OPENCAGE_URL = 'https://api.opencagedata.com/geocode/v1/json';
 
 class GeocodingService {
   constructor() {
     if (!process.env.OPENCAGE_API_KEY) {
-      logger.warn('OPENCAGE_API_KEY is not set in environment variables');
+      logger.warn('OPENCAGE_API_KEY is not set: disasters will be saved without coordinates');
     }
+  }
+
+  async query(q) {
+    const key = process.env.OPENCAGE_API_KEY;
+    if (!key) return null;
+    const url = new URL(OPENCAGE_URL);
+    url.searchParams.set('q', q);
+    url.searchParams.set('key', key);
+    url.searchParams.set('limit', '1');
+    url.searchParams.set('no_annotations', '1');
+
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`OpenCage returned HTTP ${res.status}`);
+    const body = await res.json();
+    return body?.results?.[0] || null;
   }
 
   async getCoordinates(locationName) {
+    if (!locationName || typeof locationName !== 'string') return null;
     try {
-      if (!locationName || typeof locationName !== 'string') {
-        logger.warn('Invalid location name provided to geocoding service');
-        return null;
-      }
-
-      const response = await opencage.geocode({
-        q: locationName,
-        key: process.env.OPENCAGE_API_KEY,
-        limit: 1,
-        no_annotations: 1
-      });
-
-      if (!response || !response.results || response.results.length === 0) {
+      const result = await this.query(locationName);
+      if (!result) {
         logger.warn(`No coordinates found for location: ${locationName}`);
         return null;
       }
-
-      const { lat, lng } = response.results[0].geometry;
-      logger.info(`Coordinates found for ${locationName}: ${lat}, ${lng}`);
-      
-      return {
-        latitude: lat,
-        longitude: lng,
-        formattedAddress: response.results[0].formatted
-      };
+      const { lat, lng } = result.geometry;
+      return { latitude: lat, longitude: lng, formattedAddress: result.formatted };
     } catch (error) {
-      logger.error('Error in geocoding service:', error);
+      logger.error(`Geocoding failed: ${error.message}`);
       return null;
     }
-  }
-
-  async reverseGeocode(latitude, longitude) {
-    try {
-      if (typeof latitude !== 'number' || typeof longitude !== 'number') {
-        logger.warn('Invalid coordinates provided to reverse geocoding service');
-        return null;
-      }
-
-      const response = await opencage.geocode({
-        q: `${latitude},${longitude}`,
-        key: process.env.OPENCAGE_API_KEY,
-        limit: 1,
-        no_annotations: 1
-      });
-
-      if (!response || !response.results || response.results.length === 0) {
-        logger.warn(`No location found for coordinates: ${latitude}, ${longitude}`);
-        return null;
-      }
-
-      const result = response.results[0];
-      logger.info(`Location found for coordinates ${latitude}, ${longitude}: ${result.formatted}`);
-      
-      return {
-        formattedAddress: result.formatted,
-        components: result.components
-      };
-    } catch (error) {
-      logger.error('Error in reverse geocoding service:', error);
-      return null;
-    }
-  }
-
-  formatPostGISPoint(latitude, longitude) {
-    return `POINT(${longitude} ${latitude})`;
   }
 }
 
-export default new GeocodingService(); 
+export default new GeocodingService();

@@ -9,11 +9,11 @@ CREATE OR REPLACE FUNCTION find_resources_within_distance(
     current_disaster_id UUID DEFAULT NULL
 ) RETURNS TABLE (
     id UUID,
-    name TEXT,
-    type TEXT,
-    location_name TEXT,
+    name VARCHAR,
+    type VARCHAR,
+    location_name VARCHAR,
     distance_meters float,
-    status TEXT,
+    status VARCHAR,
     disaster_id UUID
 ) AS $$
 BEGIN
@@ -24,14 +24,14 @@ BEGIN
         r.type,
         r.location_name,
         ST_Distance(
-            ST_SetSRID(r.location, 4326)::geography,
+            r.location::geography,
             ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography
         ) as distance_meters,
         r.status,
         r.disaster_id
     FROM resources r
     WHERE ST_DWithin(
-        ST_SetSRID(r.location, 4326)::geography,
+        r.location::geography,
         ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography,
         radius_meters
     )

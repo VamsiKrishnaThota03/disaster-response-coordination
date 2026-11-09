@@ -1,3 +1,4 @@
+-- Run in the Supabase SQL editor. Safe to re-run.
 -- Enable PostGIS extension if not already enabled
 CREATE EXTENSION IF NOT EXISTS postgis;
 
@@ -35,11 +36,11 @@ CREATE TABLE IF NOT EXISTS reports (
 
 -- Create resources table
 CREATE TABLE IF NOT EXISTS resources (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     type VARCHAR(50) NOT NULL,
     location_name VARCHAR(255) NOT NULL,
-    location POINT NOT NULL,
+    location GEOGRAPHY(POINT) NOT NULL,
     status VARCHAR(20) DEFAULT 'active',
     disaster_id UUID REFERENCES disasters(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -66,13 +67,13 @@ CREATE TABLE IF NOT EXISTS official_updates (
 
 -- Create social media posts table
 CREATE TABLE IF NOT EXISTS social_media_posts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     disaster_id UUID REFERENCES disasters(id) ON DELETE CASCADE,
     platform VARCHAR(50) NOT NULL,
     content TEXT NOT NULL,
     author VARCHAR(100) NOT NULL,
     priority VARCHAR(20) DEFAULT 'normal',
-    coordinates POINT,
+    coordinates GEOGRAPHY(POINT),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -116,11 +117,11 @@ CREATE OR REPLACE FUNCTION find_resources_within_distance(
     current_disaster_id UUID DEFAULT NULL
 ) RETURNS TABLE (
     id UUID,
-    name TEXT,
-    type TEXT,
-    location_name TEXT,
+    name VARCHAR,
+    type VARCHAR,
+    location_name VARCHAR,
     distance_meters float,
-    status TEXT,
+    status VARCHAR,
     disaster_id UUID
 ) AS $$
 BEGIN
@@ -131,14 +132,14 @@ BEGIN
         r.type,
         r.location_name,
         ST_Distance(
-            ST_SetSRID(r.location, 4326)::geography,
+            r.location::geography,
             ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography
         ) as distance_meters,
         r.status,
         r.disaster_id
     FROM resources r
     WHERE ST_DWithin(
-        ST_SetSRID(r.location, 4326)::geography,
+        r.location::geography,
         ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography,
         radius_meters
     )
@@ -194,6 +195,7 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+DROP TRIGGER IF EXISTS update_disasters_updated_at ON disasters;
 CREATE TRIGGER update_disasters_updated_at
     BEFORE UPDATE ON disasters
     FOR EACH ROW
@@ -209,6 +211,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create trigger to automatically update updated_at
+DROP TRIGGER IF EXISTS update_resources_updated_at ON resources;
 CREATE TRIGGER update_resources_updated_at
     BEFORE UPDATE ON resources
     FOR EACH ROW
@@ -224,6 +227,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create trigger to automatically update updated_at
+DROP TRIGGER IF EXISTS update_social_media_posts_updated_at ON social_media_posts;
 CREATE TRIGGER update_social_media_posts_updated_at
     BEFORE UPDATE ON social_media_posts
     FOR EACH ROW
