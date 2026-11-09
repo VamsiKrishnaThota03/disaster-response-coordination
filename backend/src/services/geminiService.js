@@ -1,318 +1,182 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import logger from '../utils/logger.js';
 import dotenv from 'dotenv';
-import fetch from 'node-fetch';
+import logger from '../utils/logger.js';
+import { fetchPublicImage } from '../utils/safeFetch.js';
 
 dotenv.config();
 
+const PRIORITIES = ['high', 'medium', 'low'];
+const CACHE_LIMIT = 500;
+
+/** Parse JSON from a model reply, tolerating ```json fences and surrounding text. */
+export function parseModelJson(text) {
+  if (!text) throw new Error('Empty model response');
+  const cleaned = text.replace(/```(?:json)?/gi, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1));
+    throw new Error('Model response is not JSON');
+  }
+}
+
 class GeminiService {
   constructor() {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        logger.warn('GEMINI_API_KEY is not set in environment variables');
-        return;
-      }
-      
-      this.genAI = new GoogleGenerativeAI(apiKey);
-      
-      // Initialize with latest stable Gemini 2.5 models
-      this.model = this.genAI.getGenerativeModel({
-        model: "gemini-2.5-pro",
-        safetySettings: [
-          {
-            category: "HARM_CATEGORY_HARASSMENT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE",
-          },
-          {
-            category: "HARM_CATEGORY_HATE_SPEECH",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE",
-          },
-          {
-            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE",
-          },
-          {
-            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-            threshold: "BLOCK_MEDIUM_AND_ABOVE",
-          },
-        ],
-      });
-
-      // Configure for structured output
-      this.structuredModel = this.genAI.getGenerativeModel({
-        model: "gemini-2.5-pro",
-        generationConfig: {
-          temperature: 0.1,
-          topP: 0.1,
-          topK: 16,
-        },
-      });
-      
-      logger.info('Gemini models initialized successfully');
-    } catch (error) {
-      logger.error('Error initializing Gemini models:', error);
+    this.priorityCache = new Map();
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      logger.warn('GEMINI_API_KEY is not set: using keyword-based fallbacks');
+      return;
     }
+
+    const genAI = new GoogleGenerativeAI(apiKey);
+    this.modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+    this.structuredModel = genAI.getGenerativeModel({
+      model: this.modelName,
+      generationConfig: {
+        temperature: 0.1,
+        topP: 0.1,
+        topK: 16,
+        responseMimeType: 'application/json',
+      },
+    });
+    logger.info(`Gemini model ${this.modelName} initialised`);
   }
 
-  async retryOperation(operation, maxRetries = 1) {
-    let lastError;
-    for (let i = 0; i < maxRetries; i++) {
+  get enabled() {
+    return Boolean(this.structuredModel);
+  }
+
+  /** Run an operation, retrying a few times with a short delay. Returns null if all attempts fail. */
+  async retryOperation(operation, maxRetries = 2) {
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
       try {
         return await operation();
       } catch (error) {
-        lastError = error;
-        // Check if it's a rate limit error
-        if (error.message && error.message.includes('429')) {
-          // Use a fixed short delay for rate limits
-          const waitTime = 1000; // Just wait 1 second before retry
-          logger.warn(`Rate limit hit. Retry ${i + 1}/${maxRetries}. Waiting ${waitTime}ms before next attempt.`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-          // For other errors, use a short fixed delay
-          const waitTime = 500;
-          logger.warn(`Retry ${i + 1}/${maxRetries}. Waiting ${waitTime}ms before next attempt.`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
+        const rateLimited = String(error?.message || '').includes('429');
+        logger.warn(`Gemini call failed (attempt ${attempt}/${maxRetries})${rateLimited ? ': rate limited' : ''}`);
+        if (attempt < maxRetries) {
+          await new Promise((resolve) => setTimeout(resolve, rateLimited ? 1000 : 300));
         }
       }
     }
-    // If we hit rate limits or max retries, use fallback methods immediately
-    if (lastError) {
-      if (lastError.message && lastError.message.includes('429')) {
-        logger.warn('Rate limit hit, using fallback method');
-      } else {
-        logger.warn('Max retries reached, using fallback method');
-      }
+    return null;
+  }
+
+  async generateJson(parts) {
+    const result = await this.retryOperation(() => this.structuredModel.generateContent(parts));
+    if (!result) return null;
+    try {
+      return parseModelJson(result.response.text());
+    } catch (error) {
+      logger.warn(`Could not parse Gemini JSON: ${error.message}`);
       return null;
     }
-    throw lastError;
   }
 
   async extractLocation(description) {
-    try {
-      if (!this.structuredModel) {
-        return this.fallbackLocationExtraction(description);
-      }
+    if (!this.enabled) return this.fallbackLocationExtraction(description);
 
-      const prompt = {
-        contents: [{
-          parts: [{
-            text: `Extract the most specific location from this disaster description. Format the response as a JSON object with 'city', 'state' (if applicable), 'country', and 'formatted' fields. If any field is unknown, set it to null.
+    const data = await this.generateJson([
+      {
+        text: `Extract the most specific location from this disaster description. Respond with a JSON object with "city", "state", "country" and "formatted" fields (null when unknown). If no clear location is found, set "formatted" to null.
 
-Description: "${description}"
+Description: ${JSON.stringify(description)}`,
+      },
+    ]);
 
-Example response:
-{
-  "city": "Miami Beach",
-  "state": "Florida",
-  "country": "USA",
-  "formatted": "Miami Beach, Florida, USA"
-}
-
-If no clear location is found, return the original text in the formatted field and null for other fields.`
-          }]
-        }]
-      };
-
-      const result = await this.retryOperation(async () => {
-        const response = await this.structuredModel.generateContent(prompt);
-        return response;
-      });
-
-      const response = await result.response;
-      const jsonStr = response.text().trim();
-      
-      try {
-        const locationData = JSON.parse(jsonStr);
-        logger.info(`Location extracted: ${locationData.formatted}`);
-        return locationData.formatted;
-      } catch (parseError) {
-        logger.error('Error parsing location JSON:', parseError);
-        return this.fallbackLocationExtraction(description);
-      }
-    } catch (error) {
-      logger.error('Error extracting location:', error);
-      return this.fallbackLocationExtraction(description);
+    if (data?.formatted && typeof data.formatted === 'string') {
+      logger.info(`Location extracted: ${data.formatted}`);
+      return data.formatted.trim();
     }
+    return this.fallbackLocationExtraction(description);
   }
 
-  fallbackLocationExtraction(description) {
-    // Enhanced pattern matching with multiple formats
+  fallbackLocationExtraction(description = '') {
     const patterns = [
-      /in ([^,.]+(?:,[^,.]+)*)/i,
-      /at ([^,.]+(?:,[^,.]+)*)/i,
-      /near ([^,.]+(?:,[^,.]+)*)/i,
-      /([^,.]+(?:,[^,.]+)*) region/i,
-      /([^,.]+(?:,[^,.]+)*) area/i
+      /\bin ([A-Z][^,.]*(?:,\s*[A-Z][^,.]*)*)/,
+      /\bat ([A-Z][^,.]*(?:,\s*[A-Z][^,.]*)*)/,
+      /\bnear ([A-Z][^,.]*(?:,\s*[A-Z][^,.]*)*)/,
+      /\bin ([^,.]+(?:,[^,.]+)*)/i,
+      /\bnear ([^,.]+(?:,[^,.]+)*)/i,
+      /([^,.]+(?:,[^,.]+)*) (?:region|area)\b/i,
     ];
-
     for (const pattern of patterns) {
       const match = description.match(pattern);
-      if (match) {
-        return match[1].trim();
-      }
+      if (match) return match[1].trim();
     }
-    return description;
+    return description.trim();
   }
 
   async verifyImage(imageUrl) {
+    if (!this.enabled) return this.getDefaultVerificationResponse('Image verification service unavailable');
+
+    let image;
     try {
-      if (!this.structuredModel) {
-        return this.getDefaultVerificationResponse('Image verification service unavailable');
-      }
-
-      // Fetch the image with timeout
-      const imageResponse = await Promise.race([
-        fetch(imageUrl),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Image fetch timeout')), 10000)
-        )
-      ]);
-
-      if (!imageResponse.ok) {
-        throw new Error('Failed to fetch image');
-      }
-      
-      const imageData = await imageResponse.arrayBuffer();
-      
-      const prompt = {
-        text: `Analyze this image to verify if it appears to be an authentic disaster photo. Provide the analysis as a JSON object with the following structure:
-
-{
-  "status": "VERIFIED" | "SUSPICIOUS" | "UNVERIFIED",
-  "confidence": "high" | "medium" | "low",
-  "analysis": {
-    "visualAuthenticity": string,
-    "contextualRelevance": string,
-    "technicalAssessment": string,
-    "summary": string
-  }
-}
-
-Consider:
-1. Visual authenticity (manipulation signs, lighting consistency)
-2. Contextual authenticity (disaster characteristics, landmarks)
-3. Technical aspects (quality, compression artifacts)`,
-        images: [imageData]
-      };
-
-      const result = await this.retryOperation(async () => {
-        const response = await this.structuredModel.generateContent(prompt);
-        return response;
-      });
-
-      const response = await result.response;
-      const jsonStr = response.text().trim();
-      
-      try {
-        const verificationData = JSON.parse(jsonStr);
-        logger.info(`Image verification completed: ${verificationData.status} (${verificationData.confidence})`);
-        return {
-          status: verificationData.status,
-          confidence: verificationData.confidence,
-          analysis: verificationData.analysis.summary
-        };
-      } catch (parseError) {
-        logger.error('Error parsing verification JSON:', parseError);
-        return this.getDefaultVerificationResponse('Failed to parse verification results');
-      }
+      image = await fetchPublicImage(imageUrl);
     } catch (error) {
-      logger.error('Error verifying image:', error);
-      return this.getDefaultVerificationResponse('Failed to verify image due to technical issues');
+      logger.warn(`Image fetch rejected: ${error.message}`);
+      return this.getDefaultVerificationResponse(`Could not load image: ${error.message}`);
     }
+
+    const data = await this.generateJson([
+      {
+        text: `Analyze this image to judge whether it looks like an authentic disaster photo. Respond with JSON:
+{"status": "VERIFIED" | "SUSPICIOUS" | "UNVERIFIED", "confidence": "high" | "medium" | "low", "analysis": {"visualAuthenticity": string, "contextualRelevance": string, "technicalAssessment": string, "summary": string}}`,
+      },
+      { inlineData: { data: image.buffer.toString('base64'), mimeType: image.mimeType } },
+    ]);
+
+    if (!data?.status) return this.getDefaultVerificationResponse('Failed to verify image');
+    return {
+      status: data.status,
+      confidence: data.confidence || 'low',
+      analysis: data.analysis?.summary || 'No summary provided',
+    };
   }
 
   getDefaultVerificationResponse(message) {
-    return {
-      status: 'UNVERIFIED',
-      confidence: 'low',
-      analysis: message
-    };
+    return { status: 'UNVERIFIED', confidence: 'low', analysis: message };
   }
 
   async analyzePriority(text) {
-    try {
-      if (!this.structuredModel) {
-        return this.fallbackPriorityAnalysis(text);
-      }
+    if (!text) return 'low';
+    if (!this.enabled) return this.fallbackPriorityAnalysis(text);
 
-      const prompt = {
-        contents: [{
-          parts: [{
-            text: `Analyze this disaster-related text and determine its priority level. Return the analysis as a JSON object with the following structure:
+    // Mock social posts repeat a lot; cache results to save Gemini quota.
+    if (this.priorityCache.has(text)) return this.priorityCache.get(text);
 
-{
-  "priority": "high" | "medium" | "low",
-  "factors": {
-    "lifeThreat": boolean,
-    "scale": "large" | "medium" | "small",
-    "timeSensitivity": "immediate" | "urgent" | "normal",
-    "populationImpact": "high" | "medium" | "low"
-  },
-  "reasoning": string
-}
+    const data = await this.generateJson([
+      {
+        text: `Determine the priority of this disaster-related text. Respond with JSON:
+{"priority": "high" | "medium" | "low", "reasoning": string}
 
-Text: "${text}"`
-          }]
-        }]
-      };
+Text: ${JSON.stringify(text)}`,
+      },
+    ]);
 
-      const result = await this.retryOperation(async () => {
-        const response = await this.structuredModel.generateContent(prompt);
-        return response;
-      });
-
-      // If we got a null result from retryOperation, use fallback
-      if (!result) {
-        logger.info('Using fallback priority analysis due to rate limit');
-        return this.fallbackPriorityAnalysis(text);
-      }
-
-      const response = await result.response;
-      const jsonStr = response.text().trim();
-      
-      try {
-        const priorityData = JSON.parse(jsonStr);
-        logger.info(`Priority analyzed: ${priorityData.priority} (${priorityData.reasoning})`);
-        return priorityData.priority;
-      } catch (parseError) {
-        logger.error('Error parsing priority JSON:', parseError);
-        return this.fallbackPriorityAnalysis(text);
-      }
-    } catch (error) {
-      logger.error('Error analyzing priority:', error);
-      return this.fallbackPriorityAnalysis(text);
+    const priority = PRIORITIES.includes(data?.priority) ? data.priority : this.fallbackPriorityAnalysis(text);
+    if (this.priorityCache.size >= CACHE_LIMIT) {
+      this.priorityCache.delete(this.priorityCache.keys().next().value);
     }
+    this.priorityCache.set(text, priority);
+    return priority;
   }
 
   fallbackPriorityAnalysis(text) {
-    if (!text) {
-      logger.warn('Empty text provided for priority analysis, defaulting to low');
-      return 'low';
-    }
-
-    const priorityPatterns = {
-      high: [
-        /urgent|emergency|immediate|critical|life.?threatening/i,
-        /casualties|deaths|injured|trapped/i,
-        /evacuat(e|ion)|rescue needed/i
-      ],
-      medium: [
-        /significant|moderate|growing|potential|risk/i,
-        /damage|affected|displaced|shelter/i
-      ]
-    };
-
-    const lowercaseText = text.toLowerCase();
-    
-    if (priorityPatterns.high.some(pattern => pattern.test(lowercaseText))) {
-      return 'high';
-    }
-    if (priorityPatterns.medium.some(pattern => pattern.test(lowercaseText))) {
-      return 'medium';
-    }
+    if (!text) return 'low';
+    const high = [
+      /urgent|emergency|immediate|critical|life.?threatening/i,
+      /casualties|deaths|injured|trapped/i,
+      /evacuat(e|ion)|rescue needed/i,
+    ];
+    const medium = [/significant|moderate|growing|potential|risk/i, /damage|affected|displaced|shelter/i];
+    if (high.some((p) => p.test(text))) return 'high';
+    if (medium.some((p) => p.test(text))) return 'medium';
     return 'low';
   }
 }
 
-export default new GeminiService(); 
+export default new GeminiService();
