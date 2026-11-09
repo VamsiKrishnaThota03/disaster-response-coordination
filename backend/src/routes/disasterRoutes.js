@@ -3,330 +3,187 @@ import logger from '../utils/logger.js';
 import geminiService from '../services/geminiService.js';
 import supabaseService from '../services/supabaseService.js';
 import geocodingService from '../services/geocodingService.js';
-import { RateLimiterMemory } from 'rate-limiter-flexible';
 import { officialUpdatesService } from '../services/officialUpdatesService.js';
+import { requireAuth, canModify } from '../middleware/auth.js';
+import { parsePoint, toWktPoint } from '../utils/geo.js';
+import { cleanString, cleanTags, emit, isUuid, reportPriority, serverError } from '../utils/http.js';
 
 const router = express.Router();
 
-// Rate limiter setup
-const rateLimiter = new RateLimiterMemory({
-  points: 10, // Number of points
-  duration: 1, // Per second
-});
+const STATUSES = ['active', 'monitoring', 'resolved'];
+const SEVERITIES = ['low', 'medium', 'high', 'critical'];
 
-// Middleware for rate limiting
-const rateLimitMiddleware = async (req, res, next) => {
-  try {
-    await rateLimiter.consume(req.ip);
-    next();
-  } catch (error) {
-    res.status(429).json({ error: 'Too many requests' });
-  }
-};
-
-// Get all disasters
-router.get('/', rateLimitMiddleware, async (req, res) => {
-  try {
-    const disasters = await supabaseService.getAllDisasters();
-    res.json(disasters);
-  } catch (error) {
-    logger.error('Error fetching disasters:', error);
-    res.status(500).json({ error: 'Failed to fetch disasters' });
-  }
-});
-
-// Get a specific disaster
-router.get('/:id', rateLimitMiddleware, async (req, res) => {
+/** Load :id into req.disaster or answer 404. */
+async function loadDisaster(req, res, next) {
+  if (!isUuid(req.params.id)) return res.status(404).json({ error: 'Disaster not found' });
   try {
     const disaster = await supabaseService.getDisasterById(req.params.id);
-    if (!disaster) {
-      return res.status(404).json({ error: 'Disaster not found' });
-    }
-    res.json(disaster);
+    if (!disaster) return res.status(404).json({ error: 'Disaster not found' });
+    req.disaster = disaster;
+    return next();
   } catch (error) {
-    logger.error('Error fetching disaster:', error);
-    res.status(500).json({ error: 'Failed to fetch disaster' });
+    return serverError(res, 'Failed to fetch disaster', error);
+  }
+}
+
+/** Gemini location + geocoding + priority, each with a fallback. */
+async function analyseDescription(description) {
+  const locationText = await geminiService.extractLocation(description);
+  const coordinates = locationText ? await geocodingService.getCoordinates(locationText) : null;
+  const priority = await geminiService.analyzePriority(description);
+  return {
+    location_name: locationText || 'Location unknown',
+    location: coordinates ? toWktPoint(coordinates.latitude, coordinates.longitude) : null,
+    priority: priority || 'medium',
+  };
+}
+
+router.get('/', async (req, res) => {
+  try {
+    res.json(await supabaseService.getAllDisasters());
+  } catch (error) {
+    serverError(res, 'Failed to fetch disasters', error);
   }
 });
 
-// Create a new disaster
-router.post('/', rateLimitMiddleware, async (req, res) => {
+router.get('/:id', loadDisaster, (req, res) => res.json(req.disaster));
+
+router.post('/', requireAuth, async (req, res) => {
+  const title = cleanString(req.body?.title, 200);
+  const description = cleanString(req.body?.description, 5000);
+  if (!title || !description) {
+    return res.status(400).json({ error: 'Title and description are required' });
+  }
+  const type = cleanString(req.body?.type, 50) || 'unknown';
+  const severity = SEVERITIES.includes(req.body?.severity) ? req.body.severity : 'medium';
+
   try {
-    const { title, description, type, severity, owner_id = 'system', tags = [] } = req.body;
-
-    // Validate required fields
-    if (!title || !description) {
-      return res.status(400).json({ error: 'Title and description are required' });
-    }
-
-    // Extract location using Gemini with fallback
-    let locationText;
-    try {
-      locationText = await geminiService.extractLocation(description);
-    } catch (error) {
-      logger.warn('Gemini location extraction failed, using fallback:', error);
-      locationText = geminiService.fallbackLocationExtraction(description);
-    }
-    
-    // Get coordinates using geocoding service
-    let coordinates;
-    try {
-      coordinates = await geocodingService.getCoordinates(locationText);
-    } catch (error) {
-      logger.error('Error getting coordinates:', error);
-      coordinates = null;
-    }
-
-    // Analyze priority with fallback
-    let priority;
-    try {
-      priority = await geminiService.analyzePriority(description);
-    } catch (error) {
-      logger.warn('Gemini priority analysis failed, using fallback:', error);
-      priority = geminiService.fallbackPriorityAnalysis(description);
-    }
-
-    // Prepare disaster data
-    const disasterData = {
-      title: title.trim(),
-      description: description.trim(),
-      type: type || 'unknown',
-      severity: severity || 'medium',
-      location_name: locationText || 'Location unknown',
-      location: coordinates ? `POINT(${coordinates.longitude} ${coordinates.latitude})` : null,
-      tags: Array.isArray(tags) ? tags : [],
-      owner_id,
+    const analysis = await analyseDescription(description);
+    const disaster = await supabaseService.createDisaster({
+      title,
+      description,
+      type,
+      severity,
+      tags: cleanTags(req.body?.tags),
+      owner_id: req.user.id,
       status: 'active',
-      priority: priority || 'medium'
-    };
-
-    logger.info('Attempting to create disaster:', disasterData);
-
-    const newDisaster = await supabaseService.createDisaster(disasterData);
-    
-    logger.info('Disaster created successfully:', newDisaster);
-    res.status(201).json(newDisaster);
-  } catch (error) {
-    logger.error('Error in disaster creation route:', error);
-    res.status(500).json({ 
-      error: 'Failed to create disaster', 
-      details: error.message,
-      code: error.code 
+      ...analysis,
     });
-  }
-});
-
-// Update a disaster
-router.put('/:id', rateLimitMiddleware, async (req, res) => {
-  try {
-    const { title, description, type, severity, status, location } = req.body;
-    const disasterId = req.params.id;
-
-    const existingDisaster = await supabaseService.getDisasterById(disasterId);
-    if (!existingDisaster) {
-      return res.status(404).json({ error: 'Disaster not found' });
-    }
-
-    const updatedDisaster = {
-      ...existingDisaster,
-      title: title || existingDisaster.title,
-      description: description || existingDisaster.description,
-      type: type || existingDisaster.type,
-      severity: severity || existingDisaster.severity,
-      status: status || existingDisaster.status,
-      location: location || existingDisaster.location,
-      updated_at: new Date().toISOString()
-    };
-
-    // If description changed, update location and priority
-    if (description && description !== existingDisaster.description) {
-      const locationText = await geminiService.extractLocation(description);
-      const coordinates = await geocodingService.getCoordinates(locationText);
-      const priority = await geminiService.analyzePriority(description);
-
-      if (coordinates) {
-        updatedDisaster.location = {
-          type: 'Point',
-          coordinates: [coordinates.longitude, coordinates.latitude]
-        };
-      }
-
-      updatedDisaster.priority = priority;
-    }
-
-    const result = await supabaseService.updateDisaster(disasterId, updatedDisaster);
-    res.json(result);
+    logger.info(`Disaster created: ${disaster.id}`);
+    emit(req, 'disaster_updated', { action: 'create', id: disaster.id });
+    return res.status(201).json(disaster);
   } catch (error) {
-    logger.error('Error updating disaster:', error);
-    res.status(500).json({ error: 'Failed to update disaster' });
+    return serverError(res, 'Failed to create disaster', error);
   }
 });
 
-// Delete a disaster
-router.delete('/:id', rateLimitMiddleware, async (req, res) => {
-  try {
-    const disasterId = req.params.id;
-    
-    const existingDisaster = await supabaseService.getDisasterById(disasterId);
-    if (!existingDisaster) {
-      return res.status(404).json({ error: 'Disaster not found' });
-    }
+router.put('/:id', requireAuth, loadDisaster, async (req, res) => {
+  if (!canModify(req.user, req.disaster.owner_id)) {
+    return res.status(403).json({ error: 'Only the reporter or an admin can edit this disaster' });
+  }
+  const body = req.body || {};
+  const changes = {};
+  if (body.title !== undefined) changes.title = cleanString(body.title, 200);
+  if (body.description !== undefined) changes.description = cleanString(body.description, 5000);
+  if (body.type !== undefined) changes.type = cleanString(body.type, 50);
+  if (body.tags !== undefined) changes.tags = cleanTags(body.tags);
+  if (body.severity !== undefined) {
+    if (!SEVERITIES.includes(body.severity)) return res.status(400).json({ error: `severity must be one of ${SEVERITIES.join(', ')}` });
+    changes.severity = body.severity;
+  }
+  if (body.status !== undefined) {
+    if (!STATUSES.includes(body.status)) return res.status(400).json({ error: `status must be one of ${STATUSES.join(', ')}` });
+    changes.status = body.status;
+  }
+  if (changes.title === '' || changes.description === '') {
+    return res.status(400).json({ error: 'Title and description cannot be empty' });
+  }
 
-    await supabaseService.deleteDisaster(disasterId);
-    res.json({ message: 'Disaster deleted successfully' });
+  try {
+    if (changes.description && changes.description !== req.disaster.description) {
+      Object.assign(changes, await analyseDescription(changes.description));
+    }
+    const updated = await supabaseService.updateDisaster(req.disaster.id, changes);
+    emit(req, 'disaster_updated', { action: 'update', id: updated.id });
+    return res.json(updated);
   } catch (error) {
-    logger.error('Error deleting disaster:', error);
-    res.status(500).json({ error: 'Failed to delete disaster' });
+    return serverError(res, 'Failed to update disaster', error);
   }
 });
 
-// Get nearby resources
-router.get('/:id/resources', async (req, res) => {
+router.delete('/:id', requireAuth, loadDisaster, async (req, res) => {
+  if (!canModify(req.user, req.disaster.owner_id)) {
+    return res.status(403).json({ error: 'Only the reporter or an admin can delete this disaster' });
+  }
   try {
-    const { radius = 10000 } = req.query;
-    const disaster = await supabaseService.getDisasterById(req.params.id);
-
-    if (!disaster || !disaster.location) {
-      return res.status(404).json({ error: 'Disaster or location not found' });
-    }
-
-    // Extract coordinates from GeoJSON format
-    const coordinates = disaster.location.coordinates;
-    if (!coordinates || coordinates.length !== 2) {
-      return res.status(400).json({ error: 'Invalid location format' });
-    }
-
-    const [longitude, latitude] = coordinates;
-
-    const resources = await supabaseService.findResourcesWithinDistance(
-      latitude,
-      longitude,
-      parseFloat(radius),
-      disaster.id
-    );
-
-    res.json(resources || []);
+    await supabaseService.deleteDisaster(req.disaster.id);
+    emit(req, 'disaster_updated', { action: 'delete', id: req.disaster.id });
+    return res.json({ message: 'Disaster deleted successfully' });
   } catch (error) {
-    logger.error('Error fetching nearby resources:', error);
-    res.status(500).json({ error: error.message });
+    return serverError(res, 'Failed to delete disaster', error);
   }
 });
 
-// Verify an image
-router.post('/:id/verify-image', rateLimitMiddleware, async (req, res) => {
+router.get('/:id/resources', loadDisaster, async (req, res) => {
+  const point = parsePoint(req.disaster.location);
+  if (!point) return res.json([]); // disaster has no coordinates yet
+  const radius = Math.min(Math.max(Number(req.query.radius) || 10000, 1), 200000);
   try {
-    const { image_url } = req.body;
-    if (!image_url) {
-      return res.status(400).json({ error: 'Image URL is required' });
-    }
-
-    const verification = await geminiService.verifyImage(image_url);
-    res.json(verification);
+    const resources = await supabaseService.findResourcesWithinDistance(point.latitude, point.longitude, radius, req.disaster.id);
+    return res.json(resources);
   } catch (error) {
-    logger.error('Error verifying image:', error);
-    res.status(500).json({ error: error.message });
+    return serverError(res, 'Failed to fetch nearby resources', error);
   }
 });
 
-// Get reports for a disaster
-router.get('/:id/reports', rateLimitMiddleware, async (req, res) => {
+router.post('/:id/verify-image', requireAuth, loadDisaster, async (req, res) => {
+  const imageUrl = cleanString(req.body?.image_url, 2000);
+  if (!imageUrl) return res.status(400).json({ error: 'Image URL is required' });
   try {
-    const disasterId = req.params.id;
-
-    // Verify disaster exists
-    const disaster = await supabaseService.getDisasterById(disasterId);
-    if (!disaster) {
-      return res.status(404).json({ error: 'Disaster not found' });
-    }
-
-    const reports = await supabaseService.getReportsByDisasterId(disasterId);
-    res.json(reports);
+    return res.json(await geminiService.verifyImage(imageUrl));
   } catch (error) {
-    logger.error('Error fetching reports:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch reports',
-      details: error.message,
-      code: error.code
-    });
+    return serverError(res, 'Failed to verify image', error);
   }
 });
 
-// Create a report
-router.post('/:id/reports', rateLimitMiddleware, async (req, res) => {
+router.get('/:id/reports', loadDisaster, async (req, res) => {
   try {
-    const { content, image_url, user_id = 'system' } = req.body;
-    const disaster_id = req.params.id;
+    return res.json(await supabaseService.getReportsByDisasterId(req.disaster.id));
+  } catch (error) {
+    return serverError(res, 'Failed to fetch reports', error);
+  }
+});
 
-    // Validate required fields
-    if (!content) {
-      return res.status(400).json({ error: 'Report content is required' });
-    }
+router.post('/:id/reports', requireAuth, loadDisaster, async (req, res) => {
+  const content = cleanString(req.body?.content, 5000);
+  if (!content) return res.status(400).json({ error: 'Report content is required' });
+  const imageUrl = cleanString(req.body?.image_url, 2000) || null;
+  if (imageUrl && !/^https?:\/\//i.test(imageUrl)) {
+    return res.status(400).json({ error: 'Image URL must start with http:// or https://' });
+  }
 
-    // Verify disaster exists
-    const disaster = await supabaseService.getDisasterById(disaster_id);
-    if (!disaster) {
-      return res.status(404).json({ error: 'Disaster not found' });
-    }
-
-    // Analyze priority based on content
-    const priority = content.toLowerCase().includes('urgent') || 
-                    content.toLowerCase().includes('emergency') ||
-                    content.toLowerCase().includes('immediate') ||
-                    content.toLowerCase().includes('critical')
-      ? 'high'
-      : 'normal';
-
-    // Prepare report data
-    const reportData = {
-      disaster_id,
-      user_id,
-      content: content.trim(),
-      image_url: image_url || null,
+  try {
+    const report = await supabaseService.createReport({
+      disaster_id: req.disaster.id,
+      user_id: req.user.id,
+      content,
+      image_url: imageUrl,
       verification_status: 'pending',
-      priority
-    };
-
-    logger.info('Attempting to create report:', reportData);
-    const newReport = await supabaseService.createReport(reportData);
-    
-    // Emit update event if socket.io is available
-    const io = req.app.get('io');
-    if (io) {
-      io.emit('report_created', { disaster_id, report: newReport });
-    }
-
-    res.status(201).json(newReport);
-  } catch (error) {
-    logger.error('Error in report creation route:', error);
-    res.status(500).json({ 
-      error: 'Failed to create report',
-      details: error.message,
-      code: error.code
+      priority: reportPriority(content),
     });
+    emit(req, 'report_created', { disaster_id: req.disaster.id, report });
+    return res.status(201).json(report);
+  } catch (error) {
+    return serverError(res, 'Failed to create report', error);
   }
 });
 
-// Get official updates for a disaster
-router.get('/:id/official-updates', rateLimitMiddleware, async (req, res) => {
+router.get('/:id/official-updates', loadDisaster, async (req, res) => {
   try {
-    const disasterId = req.params.id;
-
-    // Verify disaster exists
-    const disaster = await supabaseService.getDisasterById(disasterId);
-    if (!disaster) {
-      return res.status(404).json({ error: 'Disaster not found' });
-    }
-
-    // Get official updates from service
-    const updates = await officialUpdatesService.fetchUpdates(disasterId, disaster.location_name);
-    res.json(updates);
+    return res.json(await officialUpdatesService.fetchUpdates(req.disaster.id, req.disaster.location_name));
   } catch (error) {
-    logger.error('Error fetching official updates:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch official updates',
-      details: error.message
-    });
+    return serverError(res, 'Failed to fetch official updates', error);
   }
 });
 
-export default router; 
+export default router;

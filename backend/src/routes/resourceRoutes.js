@@ -1,188 +1,101 @@
 import express from 'express';
 import logger from '../utils/logger.js';
 import supabaseService from '../services/supabaseService.js';
-import { RateLimiterMemory } from 'rate-limiter-flexible';
+import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { toWktPoint } from '../utils/geo.js';
+import { cleanString, emit, isUuid, serverError } from '../utils/http.js';
 
 const router = express.Router();
 
-// Rate limiter setup
-const rateLimiter = new RateLimiterMemory({
-  points: 10, // Number of points
-  duration: 1, // Per second
-});
-
-// Middleware for rate limiting
-const rateLimitMiddleware = async (req, res, next) => {
-  try {
-    await rateLimiter.consume(req.ip);
-    next();
-  } catch (error) {
-    res.status(429).json({ error: 'Too many requests' });
-  }
+const parseCoords = (latitude, longitude) => {
+  const lat = Number.parseFloat(latitude);
+  const lng = Number.parseFloat(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
 };
 
-// Get resources within a radius of a location
-router.get('/nearby', rateLimitMiddleware, async (req, res) => {
+router.get('/nearby', async (req, res) => {
+  const coords = parseCoords(req.query.latitude, req.query.longitude);
+  if (!coords) return res.status(400).json({ error: 'Valid latitude and longitude are required' });
+  const radius = Math.min(Math.max(Number(req.query.radius) || 10000, 1), 200000);
   try {
-    const { latitude, longitude, radius = 10000 } = req.query;
-
-    logger.info(`Searching for resources near lat: ${latitude}, lon: ${longitude}, radius: ${radius}m`);
-
-    if (!latitude || !longitude) {
-      logger.warn('Missing latitude or longitude in request');
-      return res.status(400).json({ error: 'Latitude and longitude are required' });
-    }
-
-    const resources = await supabaseService.findResourcesWithinDistance(
-      parseFloat(latitude),
-      parseFloat(longitude),
-      parseFloat(radius)
-    );
-
+    const resources = await supabaseService.findResourcesWithinDistance(coords.lat, coords.lng, radius);
     logger.info(`Found ${resources.length} resources within ${radius}m`);
-    if (resources.length === 0) {
-      logger.info('No resources found in the specified radius');
-    } else {
-      logger.info('Resources found:', resources);
-    }
-
-    res.json(resources);
+    return res.json(resources);
   } catch (error) {
-    logger.error('Error finding nearby resources:', error);
-    res.status(500).json({ 
-      error: 'Failed to find nearby resources',
-      details: error.message
-    });
+    return serverError(res, 'Failed to find nearby resources', error);
   }
 });
 
-// Create a new resource
-router.post('/', rateLimitMiddleware, async (req, res) => {
+router.post('/', requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const name = cleanString(body.name, 200);
+  const type = cleanString(body.type, 50);
+  const locationName = cleanString(body.location_name, 200);
+  const coords = parseCoords(body.latitude, body.longitude);
+
+  if (!name || !type || !locationName) {
+    return res.status(400).json({ error: 'Name, type and location_name are required' });
+  }
+  if (!coords) return res.status(400).json({ error: 'Invalid latitude or longitude values' });
+  if (body.disaster_id && !isUuid(body.disaster_id)) {
+    return res.status(400).json({ error: 'Invalid disaster_id' });
+  }
+
   try {
-    const {
+    const resource = await supabaseService.createResource({
       name,
       type,
-      location_name,
-      latitude,
-      longitude,
-      status,
-      disaster_id
-    } = req.body;
-
-    logger.info('Attempting to create resource:', {
-      name,
-      type,
-      location_name,
-      latitude,
-      longitude,
-      status,
-      disaster_id
+      location_name: locationName,
+      location: toWktPoint(coords.lat, coords.lng),
+      status: body.status === 'inactive' ? 'inactive' : 'active',
+      disaster_id: body.disaster_id || null,
     });
-
-    // Validate required fields
-    if (!name || !type || !location_name || !latitude || !longitude) {
-      logger.warn('Missing required fields:', {
-        name: !!name,
-        type: !!type,
-        location_name: !!location_name,
-        latitude: !!latitude,
-        longitude: !!longitude
-      });
-      return res.status(400).json({ 
-        error: 'Name, type, location_name, latitude, and longitude are required',
-        received: { name, type, location_name, latitude, longitude }
-      });
-    }
-
-    // Validate latitude and longitude
-    const lat = parseFloat(latitude);
-    const lng = parseFloat(longitude);
-    if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      logger.warn('Invalid coordinates:', { latitude, longitude });
-      return res.status(400).json({ 
-        error: 'Invalid latitude or longitude values',
-        received: { latitude, longitude }
-      });
-    }
-
-    const resource = {
-      name,
-      type,
-      location_name,
-      location: `POINT(${lng} ${lat})`,
-      status: status || 'active',
-      disaster_id
-    };
-
-    const newResource = await supabaseService.createResource(resource);
-    logger.info('Resource created successfully:', newResource);
-    res.status(201).json(newResource);
+    emit(req, 'resource_created', { disaster_id: resource.disaster_id, resource });
+    return res.status(201).json(resource);
   } catch (error) {
-    logger.error('Error creating resource:', error);
-    res.status(500).json({ 
-      error: 'Failed to create resource',
-      details: error.message
-    });
+    return serverError(res, 'Failed to create resource', error);
   }
 });
 
-// Update a resource
-router.put('/:id', rateLimitMiddleware, async (req, res) => {
+async function loadResource(req, res, next) {
+  if (!isUuid(req.params.id)) return res.status(404).json({ error: 'Resource not found' });
   try {
-    const resourceId = req.params.id;
-    const {
-      name,
-      type,
-      quantity,
-      status,
-      latitude,
-      longitude,
-      contact,
-      notes
-    } = req.body;
-
-    const existingResource = await supabaseService.getResourceById(resourceId);
-    if (!existingResource) {
-      return res.status(404).json({ error: 'Resource not found' });
-    }
-
-    const updatedResource = {
-      ...existingResource,
-      name: name || existingResource.name,
-      type: type || existingResource.type,
-      quantity: quantity || existingResource.quantity,
-      status: status || existingResource.status,
-      latitude: latitude ? parseFloat(latitude) : existingResource.latitude,
-      longitude: longitude ? parseFloat(longitude) : existingResource.longitude,
-      contact: contact || existingResource.contact,
-      notes: notes || existingResource.notes,
-      updated_at: new Date().toISOString()
-    };
-
-    const result = await supabaseService.updateResource(resourceId, updatedResource);
-    res.json(result);
+    const resource = await supabaseService.getResourceById(req.params.id);
+    if (!resource) return res.status(404).json({ error: 'Resource not found' });
+    req.resource = resource;
+    return next();
   } catch (error) {
-    logger.error('Error updating resource:', error);
-    res.status(500).json({ error: 'Failed to update resource' });
+    return serverError(res, 'Failed to fetch resource', error);
   }
-});
+}
 
-// Delete a resource
-router.delete('/:id', rateLimitMiddleware, async (req, res) => {
+router.put('/:id', requireAuth, requireAdmin, loadResource, async (req, res) => {
+  const body = req.body || {};
+  const changes = {};
+  if (body.name !== undefined) changes.name = cleanString(body.name, 200);
+  if (body.type !== undefined) changes.type = cleanString(body.type, 50);
+  if (body.location_name !== undefined) changes.location_name = cleanString(body.location_name, 200);
+  if (body.status !== undefined) changes.status = body.status === 'inactive' ? 'inactive' : 'active';
+  if (body.latitude !== undefined || body.longitude !== undefined) {
+    const coords = parseCoords(body.latitude, body.longitude);
+    if (!coords) return res.status(400).json({ error: 'Invalid latitude or longitude values' });
+    changes.location = toWktPoint(coords.lat, coords.lng);
+  }
   try {
-    const resourceId = req.params.id;
-    
-    const existingResource = await supabaseService.getResourceById(resourceId);
-    if (!existingResource) {
-      return res.status(404).json({ error: 'Resource not found' });
-    }
-
-    await supabaseService.deleteResource(resourceId);
-    res.json({ message: 'Resource deleted successfully' });
+    return res.json(await supabaseService.updateResource(req.resource.id, changes));
   } catch (error) {
-    logger.error('Error deleting resource:', error);
-    res.status(500).json({ error: 'Failed to delete resource' });
+    return serverError(res, 'Failed to update resource', error);
   }
 });
 
-export default router; 
+router.delete('/:id', requireAuth, requireAdmin, loadResource, async (req, res) => {
+  try {
+    await supabaseService.deleteResource(req.resource.id);
+    return res.json({ message: 'Resource deleted successfully' });
+  } catch (error) {
+    return serverError(res, 'Failed to delete resource', error);
+  }
+});
+
+export default router;

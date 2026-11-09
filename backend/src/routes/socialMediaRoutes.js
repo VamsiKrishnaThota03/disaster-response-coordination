@@ -2,28 +2,11 @@ import express from 'express';
 import logger from '../utils/logger.js';
 import mockSocialMediaService from '../services/mockSocialMediaService.js';
 import geminiService from '../services/geminiService.js';
-import { RateLimiterMemory } from 'rate-limiter-flexible';
 
 const router = express.Router();
 
-// Rate limiter setup
-const rateLimiter = new RateLimiterMemory({
-  points: 10, // Number of points
-  duration: 1, // Per second
-});
-
-// Middleware for rate limiting
-const rateLimitMiddleware = async (req, res, next) => {
-  try {
-    await rateLimiter.consume(req.ip);
-    next();
-  } catch (error) {
-    res.status(429).json({ error: 'Too many requests' });
-  }
-};
-
 // Get social media posts for a disaster
-router.get('/disaster/:disasterId', rateLimitMiddleware, async (req, res) => {
+router.get('/disaster/:disasterId', async (req, res) => {
   try {
     const { disasterId } = req.params;
     const { keywords, timeframe } = req.query;
@@ -56,7 +39,7 @@ router.get('/disaster/:disasterId', rateLimitMiddleware, async (req, res) => {
 });
 
 // Get high-priority social media posts
-router.get('/priority/:disasterId', rateLimitMiddleware, async (req, res) => {
+router.get('/priority/:disasterId', async (req, res) => {
   try {
     const { disasterId } = req.params;
     const { timeframe } = req.query;
@@ -70,6 +53,7 @@ router.get('/priority/:disasterId', rateLimitMiddleware, async (req, res) => {
     // Filter and analyze posts
     const highPriorityPosts = [];
     for (const post of posts) {
+      // analyzePriority falls back to keyword rules and caches results.
       const priority = await geminiService.analyzePriority(post.content);
       if (priority === 'high') {
         highPriorityPosts.push({ ...post, priority });
@@ -84,7 +68,7 @@ router.get('/priority/:disasterId', rateLimitMiddleware, async (req, res) => {
 });
 
 // Get trending topics from social media
-router.get('/trends/:disasterId', rateLimitMiddleware, async (req, res) => {
+router.get('/trends/:disasterId', async (req, res) => {
   try {
     const { disasterId } = req.params;
     const { timeframe } = req.query;
