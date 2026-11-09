@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   VStack,
@@ -85,11 +85,7 @@ const OfficialUpdates = ({ disasterId }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    fetchUpdates();
-  }, [disasterId]);
-
-  const fetchUpdates = async () => {
+  const fetchUpdates = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
@@ -101,13 +97,16 @@ const OfficialUpdates = ({ disasterId }) => {
 
       const data = await response.json();
       setUpdates(data);
-    } catch (error) {
-      console.error('Error fetching official updates:', error);
+    } catch {
       setError('Failed to load official updates. Please try again later.');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [disasterId]);
+
+  useEffect(() => {
+    fetchUpdates();
+  }, [fetchUpdates]);
 
   if (isLoading) {
     return (

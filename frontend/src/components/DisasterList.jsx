@@ -38,6 +38,8 @@ import ResourceForm from './ResourceForm';
 import MapView from './MapView';
 import OfficialUpdates from './OfficialUpdates';
 import { BACKEND_URL } from '../config';
+import { parsePoint } from '../lib/geo';
+import { useAuth } from '../context/AuthContext';
 import socketService from '../services/socketService';
 
 // Utility function for determining priority color
@@ -56,7 +58,7 @@ const DisasterCard = ({ disaster, onClick, onReportClick }) => {
   const tagBg = useColorModeValue('blue.900', 'blue.900');
   const textColor = useColorModeValue('gray.100', 'gray.100');
   const descriptionColor = useColorModeValue('gray.400', 'gray.400');
-  const metaColor = useColorModeValue('gray.500', 'gray.500');
+  const metaColor = useColorModeValue('gray.400', 'gray.400');
 
   return (
     <Box
@@ -71,12 +73,21 @@ const DisasterCard = ({ disaster, onClick, onReportClick }) => {
         shadow: 'dark-lg',
         borderColor: 'gray.600'
       }}
-      height="320px"
+      minH="300px"
       display="flex"
       flexDirection="column"
-      maxW="280px"
       cursor="pointer"
-      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      aria-label={`View details for ${disaster.title}`}
+      onClick={() => onClick(disaster)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick(disaster);
+        }
+      }}
+      _focusVisible={{ outline: '2px solid', outlineColor: 'blue.300' }}
     >
       <Box p={4} flex="1" display="flex" flexDirection="column">
         <Flex justify="space-between" align="center" mb={3}>
@@ -106,9 +117,10 @@ const DisasterCard = ({ disaster, onClick, onReportClick }) => {
           {disaster.title}
         </Heading>
 
-        <Text color={descriptionColor} mb={3} noOfLines={3} flex="1" fontSize="sm">
+        <Text color={descriptionColor} mb={3} noOfLines={3} fontSize="sm">
           {disaster.description}
         </Text>
+        <Box flex="1" />
 
         <HStack spacing={3} mb={3}>
           <HStack color={metaColor} spacing={1}>
@@ -291,7 +303,10 @@ const SocialMediaPost = ({ post }) => {
   );
 };
 
-const DisasterList = ({ disasters }) => {
+const DisasterList = ({ disasters, onRequireAuth, onCreate }) => {
+  const { user } = useAuth();
+  const [reportsVersion, setReportsVersion] = useState(0);
+  const requireUser = (fn) => () => (user ? fn() : onRequireAuth?.());
   const [selectedDisaster, setSelectedDisaster] = useState(null);
   const [socialMediaPosts, setSocialMediaPosts] = useState([]);
   const [nearbyResources, setNearbyResources] = useState([]);
@@ -300,14 +315,9 @@ const DisasterList = ({ disasters }) => {
   const [showReportForm, setShowReportForm] = useState(false);
   const [showResourceForm, setShowResourceForm] = useState(false);
 
-  const modalBg = useColorModeValue('white', 'gray.800');
-  const borderColor = useColorModeValue('gray.200', 'gray.600');
-  const tagBg = useColorModeValue('blue.50', 'blue.900');
+  const tagBg = useColorModeValue('blue.900', 'blue.900');
 
   useEffect(() => {
-    // Get socket instance
-    const socket = socketService.getSocket();
-
     // Add event listeners
     socketService.addListener('social_media_updated', (disasterId) => {
       if (selectedDisaster?.id === disasterId) {
@@ -317,7 +327,7 @@ const DisasterList = ({ disasters }) => {
 
     socketService.addListener('report_created', ({ disaster_id }) => {
       if (selectedDisaster?.id === disaster_id) {
-        fetchSocialMediaPosts(disaster_id);
+        setReportsVersion((v) => v + 1);
       }
     });
 
@@ -381,7 +391,7 @@ const DisasterList = ({ disasters }) => {
 
   const handleReportSubmitted = () => {
     if (selectedDisaster) {
-      fetchSocialMediaPosts(selectedDisaster.id);
+      setReportsVersion((v) => v + 1);
       setShowReportForm(false);
     }
   };
@@ -395,14 +405,14 @@ const DisasterList = ({ disasters }) => {
 
   return (
     <Box>
-      <Box mb={6}>
-        <Heading size="md" mb={1}>Active Disasters</Heading>
-        <Text color="gray.600" fontSize="sm">Monitor and respond to ongoing disasters in your area</Text>
-      </Box>
+      <Flex mb={4} justify="space-between" align="baseline" wrap="wrap" gap={2}>
+        <Heading size="md">Disasters</Heading>
+        <Text color="gray.400" fontSize="sm">Select a card for reports, resources and the map</Text>
+      </Flex>
 
       {Array.isArray(disasters) && disasters.length > 0 ? (
         <SimpleGrid 
-          columns={{ base: 1, sm: 2, md: 3, lg: 4 }} 
+          columns={{ base: 1, sm: 2, lg: 3, xl: 4 }} 
           spacing={4} 
           w="100%"
         >
@@ -411,27 +421,35 @@ const DisasterList = ({ disasters }) => {
               key={disaster.id}
               disaster={disaster}
               onClick={handleDisasterClick}
-              onReportClick={() => {
+              onReportClick={requireUser(() => {
                 setSelectedDisaster(disaster);
                 setShowReportForm(true);
                 onOpen();
-              }}
+              })}
             />
           ))}
         </SimpleGrid>
       ) : (
         <Box 
           textAlign="center" 
-          py={8}
+          py={12}
+          px={4}
           borderWidth="1px"
           borderRadius="lg"
           borderStyle="dashed"
+          borderColor="gray.600"
+          bg="gray.800"
         >
-          <Icon as={FaExclamationCircle} w={8} h={8} color="gray.400" mb={3} />
-          <Text fontSize="md" color="gray.600">No disasters reported yet.</Text>
-          <Text fontSize="sm" color="gray.500">
-            Active disasters will appear here when reported.
+          <Icon as={FaExclamationCircle} w={10} h={10} color="gray.500" mb={3} />
+          <Text fontSize="lg" fontWeight="semibold" color="gray.200">No disasters reported yet</Text>
+          <Text fontSize="sm" color="gray.400" mb={5}>
+            When someone reports a disaster it will show up here in real time.
           </Text>
+          {onCreate && (
+            <Button colorScheme="red" size="sm" onClick={onCreate}>
+              Report the first disaster
+            </Button>
+          )}
         </Box>
       )}
 
@@ -461,7 +479,7 @@ const DisasterList = ({ disasters }) => {
           ) : (
             <>
               <ModalHeader borderBottomWidth="1px" py={3} borderBottomColor="gray.700">
-                <HStack justify="space-between" align="flex-start">
+                <Flex justify="space-between" align="flex-start" wrap="wrap" gap={3} pr={8}>
                   <VStack align="flex-start" spacing={2}>
                     <Heading size="md">{selectedDisaster?.title}</Heading>
                     <HStack>
@@ -493,7 +511,7 @@ const DisasterList = ({ disasters }) => {
                         leftIcon={<FaFileAlt />}
                         colorScheme="orange"
                         size="sm"
-                        onClick={() => setShowReportForm(true)}
+                        onClick={requireUser(() => setShowReportForm(true))}
                       >
                         Submit Report
                       </Button>
@@ -501,13 +519,13 @@ const DisasterList = ({ disasters }) => {
                         leftIcon={<FaHandHoldingHeart />}
                         colorScheme="green"
                         size="sm"
-                        onClick={() => setShowResourceForm(true)}
+                        onClick={requireUser(() => setShowResourceForm(true))}
                       >
                         Add Resource
                       </Button>
                     </HStack>
                   )}
-                </HStack>
+                </Flex>
               </ModalHeader>
               <ModalCloseButton />
               <ModalBody py={4}>
@@ -553,10 +571,10 @@ const DisasterList = ({ disasters }) => {
                   ) : (
                     <>
                       <Box>
-                        <Text color="gray.600" fontSize="sm" whiteSpace="pre-wrap">
+                        <Text color="gray.300" fontSize="sm" whiteSpace="pre-wrap">
                           {selectedDisaster?.description}
                         </Text>
-                        <HStack mt={3} color="gray.500">
+                        <HStack mt={3} color="gray.400">
                           <Icon as={FaMapMarkerAlt} boxSize="3" />
                           <Text fontSize="sm">{selectedDisaster?.location_name}</Text>
                         </HStack>
@@ -567,7 +585,7 @@ const DisasterList = ({ disasters }) => {
                                 <Tag 
                                   size="sm" 
                                   bg={tagBg}
-                                  color="blue.600"
+                                  color="blue.200"
                                   borderRadius="full"
                                   px={2}
                                   py={0.5}
@@ -630,7 +648,7 @@ const DisasterList = ({ disasters }) => {
                                   ml={2}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setShowResourceForm(true);
+                                    requireUser(() => setShowResourceForm(true))();
                                   }}
                                 >
                                   Add
@@ -671,9 +689,10 @@ const DisasterList = ({ disasters }) => {
                             <MapView 
                               disasters={[selectedDisaster]} 
                               resources={nearbyResources}
-                              center={selectedDisaster?.location?.coordinates ? 
-                                [selectedDisaster.location.coordinates[1], selectedDisaster.location.coordinates[0]] :
-                                undefined}
+                              center={(() => {
+                                const p = parsePoint(selectedDisaster?.location);
+                                return p ? [p.latitude, p.longitude] : undefined;
+                              })()}
                             />
                           </AccordionPanel>
                         </AccordionItem>
@@ -710,7 +729,7 @@ const DisasterList = ({ disasters }) => {
                             <AccordionIcon color="gray.400" />
                           </AccordionButton>
                           <AccordionPanel pt={4}>
-                            <Reports disasterId={selectedDisaster?.id} />
+                            <Reports disasterId={selectedDisaster?.id} refreshKey={reportsVersion} />
                           </AccordionPanel>
                         </AccordionItem>
 

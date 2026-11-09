@@ -104,7 +104,7 @@ const ReportCard = ({ report }) => {
   );
 };
 
-const Reports = ({ disasterId }) => {
+const Reports = ({ disasterId, refreshKey = 0 }) => {
   const [reports, setReports] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -128,7 +128,7 @@ const Reports = ({ disasterId }) => {
     if (disasterId) {
       fetchReports();
     }
-  }, [disasterId]);
+  }, [disasterId, refreshKey]);
 
   if (isLoading) {
     return (
@@ -140,7 +140,7 @@ const Reports = ({ disasterId }) => {
 
   if (error) {
     return (
-      <Box textAlign="center" py={8} color="red.500">
+      <Box textAlign="center" py={8} color="red.300">
         <Text>Error: {error}</Text>
       </Box>
     );
@@ -156,7 +156,7 @@ const Reports = ({ disasterId }) => {
         borderRadius="lg"
         borderStyle="dashed"
       >
-        <Text color="gray.500">No reports available for this disaster yet.</Text>
+        <Text color="gray.400">No reports for this disaster yet.</Text>
       </Box>
     );
   }
