@@ -9,20 +9,7 @@ class SocketService {
 
   connect() {
     if (!this.socket) {
-      console.log('Initializing socket connection to:', BACKEND_URL);
       this.socket = io(BACKEND_URL, SOCKET_CONFIG);
-
-      this.socket.on('connect', () => {
-        console.log('Socket connected successfully');
-      });
-
-      this.socket.on('connect_error', (error) => {
-        console.error('Socket connection error:', error);
-      });
-
-      this.socket.on('disconnect', (reason) => {
-        console.log('Socket disconnected:', reason);
-      });
     }
     return this.socket;
   }

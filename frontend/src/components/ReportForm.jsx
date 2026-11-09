@@ -20,7 +20,8 @@ import {
   Icon,
 } from '@chakra-ui/react';
 import { FaImage, FaFileAlt, FaExclamationTriangle, FaCheckCircle, FaTimesCircle, FaHourglassHalf } from 'react-icons/fa';
-import { BACKEND_URL } from '../config';
+import { apiFetch } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 
 const ReportForm = ({ disasterId, onReportSubmitted }) => {
   const [formData, setFormData] = useState({
@@ -33,6 +34,7 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
   const [isVerifying, setIsVerifying] = useState(false);
   const [wordCount, setWordCount] = useState(0);
   const toast = useToast();
+  const { token } = useAuth();
 
   // Dark mode colors
   const bgColor = useColorModeValue('gray.800', 'gray.800');
@@ -58,23 +60,11 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
         await verifyImage();
       }
 
-      const response = await fetch(`${BACKEND_URL}/api/disasters/${disasterId}/reports`, {
+      await apiFetch(`/api/disasters/${disasterId}/reports`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ...formData,
-          verification_status: imageVerification?.status || 'pending',
-          priority: getContentPriority(formData.content),
-        }),
+        token,
+        body: { content: formData.content, image_url: formData.image_url || undefined },
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || data.details || 'Failed to submit report');
-      }
 
       toast({
         title: 'Report Submitted',
@@ -115,21 +105,11 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
 
     setIsVerifying(true);
     try {
-      const response = await fetch(`${BACKEND_URL}/api/disasters/${disasterId}/verify-image`, {
+      const data = await apiFetch(`/api/disasters/${disasterId}/verify-image`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          image_url: formData.image_url,
-        }),
+        token,
+        body: { image_url: formData.image_url },
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to verify image');
-      }
 
       setImageVerification(data);
       
@@ -174,7 +154,7 @@ const ReportForm = ({ disasterId, onReportSubmitted }) => {
     try {
       new URL(string);
       return true;
-    } catch (_) {
+    } catch {
       return false;
     }
   };

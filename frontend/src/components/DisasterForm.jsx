@@ -13,7 +13,8 @@ import {
   AlertDescription,
   useColorModeValue,
 } from '@chakra-ui/react';
-import { BACKEND_URL } from '../config';
+import { apiFetch } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 
 const DisasterForm = ({ onDisasterCreated }) => {
   const [formData, setFormData] = useState({
@@ -24,9 +25,9 @@ const DisasterForm = ({ onDisasterCreated }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const toast = useToast();
+  const { token } = useAuth();
 
   // Dark mode colors
-  const bgColor = useColorModeValue('gray.800', 'gray.800');
   const borderColor = useColorModeValue('gray.700', 'gray.700');
   const labelColor = useColorModeValue('gray.100', 'gray.100');
   const inputBg = useColorModeValue('gray.700', 'gray.700');
@@ -44,26 +45,15 @@ const DisasterForm = ({ onDisasterCreated }) => {
         throw new Error('Title and description are required');
       }
 
-      const response = await fetch(`${BACKEND_URL}/api/disasters`, {
+      await apiFetch('/api/disasters', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ...formData,
-          owner_id: 'netrunnerX', // Mock user ID
-        }),
+        token,
+        body: { ...formData, tags: formData.tags.filter(Boolean) },
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || data.details || 'Failed to create disaster');
-      }
-
       toast({
-        title: 'Disaster Created',
-        description: 'New disaster has been successfully recorded.',
+        title: 'Disaster reported',
+        description: 'Location and priority were detected from the description.',
         status: 'success',
         duration: 5000,
         isClosable: true,
@@ -104,12 +94,7 @@ const DisasterForm = ({ onDisasterCreated }) => {
     <Box 
       as="form" 
       onSubmit={handleSubmit} 
-      bg={bgColor}
-      borderRadius="md" 
-      borderWidth="1px"
-      borderColor={borderColor}
-      p={6}
-    >
+>
       <VStack spacing={4}>
         {error && (
           <Alert status="error" borderRadius="md" bg="red.900" color="white">
@@ -143,7 +128,7 @@ const DisasterForm = ({ onDisasterCreated }) => {
             name="description"
             value={formData.description}
             onChange={handleChange}
-            placeholder="Describe the disaster and its location"
+            placeholder="What happened and where? e.g. Severe flooding in Lower Manhattan, NYC; roads closed and people stranded."
             rows={4}
             bg={inputBg}
             color={inputColor}
@@ -159,6 +144,7 @@ const DisasterForm = ({ onDisasterCreated }) => {
 
         <FormControl>
           <FormLabel color={labelColor}>Tags</FormLabel>
+
           <Input
             name="tags"
             value={formData.tags.join(', ')}
@@ -187,7 +173,7 @@ const DisasterForm = ({ onDisasterCreated }) => {
             shadow: 'lg'
           }}
         >
-          Create Disaster Report
+          Submit disaster
         </Button>
       </VStack>
     </Box>

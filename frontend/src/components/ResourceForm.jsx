@@ -21,7 +21,8 @@ import {
   useColorModeValue,
 } from '@chakra-ui/react';
 import { FaMapMarkerAlt, FaBuilding, FaTag, FaMapPin } from 'react-icons/fa';
-import { BACKEND_URL } from '../config';
+import { apiFetch } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 
 const ResourceForm = ({ disasterId, onResourceCreated }) => {
   const [formData, setFormData] = useState({
@@ -35,6 +36,7 @@ const ResourceForm = ({ disasterId, onResourceCreated }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const toast = useToast();
+  const { token } = useAuth();
 
   // Dark mode colors
   const bgColor = useColorModeValue('gray.800', 'gray.800');
@@ -72,23 +74,11 @@ const ResourceForm = ({ disasterId, onResourceCreated }) => {
         throw new Error('Invalid longitude. Must be between -180 and 180');
       }
 
-      const response = await fetch(`${BACKEND_URL}/api/resources`, {
+      await apiFetch('/api/resources', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ...formData,
-          disaster_id: disasterId,
-          location: `POINT(${lng} ${lat})`
-        }),
+        token,
+        body: { ...formData, latitude: lat, longitude: lng, disaster_id: disasterId },
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || data.details || 'Failed to create resource');
-      }
 
       toast({
         title: 'Resource Added',
@@ -132,17 +122,6 @@ const ResourceForm = ({ disasterId, onResourceCreated }) => {
     }));
   };
 
-  const resourceTypes = [
-    'medical',
-    'shelter',
-    'food',
-    'water',
-    'power',
-    'transport',
-    'communication',
-    'rescue',
-    'other'
-  ];
 
   return (
     <Box 

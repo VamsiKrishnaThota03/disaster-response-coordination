@@ -1,23 +1,17 @@
-// Production backend URL
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'https://disaster-response-coordination.onrender.com';
+// Backend base URL. Local dev talks to the local API unless VITE_BACKEND_URL is set.
+const BACKEND_URL = (
+  import.meta.env.VITE_BACKEND_URL ||
+  (import.meta.env.DEV ? 'http://localhost:3001' : 'https://disaster-response-coordination.onrender.com')
+).replace(/\/$/, '');
 
-// Socket.IO configuration
+// Socket.IO client options
 const SOCKET_CONFIG = {
-  reconnectionDelay: 1000,
   reconnection: true,
-  reconnectionAttempts: 10,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 10000,
+  reconnectionAttempts: Infinity,
   transports: ['websocket', 'polling'],
-  agent: false,
-  upgrade: true,
-  rejectUnauthorized: false,
   path: '/socket.io',
-  withCredentials: true
 };
 
-// Log the configuration in development
-if (import.meta.env.DEV) {
-  console.log('Backend URL:', BACKEND_URL);
-  console.log('Socket.IO Config:', SOCKET_CONFIG);
-}
-
-export { BACKEND_URL, SOCKET_CONFIG }; 
+export { BACKEND_URL, SOCKET_CONFIG };
