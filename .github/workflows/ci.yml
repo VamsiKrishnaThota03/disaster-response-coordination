@@ -68,8 +68,13 @@ jobs:
           HOST: 127.0.0.1
           PORT: '3001'
         run: |
-          set -uo pipefail
-          output=$(node src/server.js 2>&1); status=$?
+          # GitHub runs this with `bash -e`, so a non-zero `node` exit would
+          # abort the step at the assignment before $? could be read. The
+          # non-zero exit is the behaviour under test, so disable -e here.
+          set +e
+          output=$(node src/server.js 2>&1)
+          status=$?
+          set -e
           echo "$output"
           test "$status" -ne 0 || { echo "::error::server started with the bypass enabled"; exit 1; }
           echo "$output" | grep -q "Refusing to start" || { echo "::error::missing refusal message"; exit 1; }
@@ -81,8 +86,11 @@ jobs:
           HOST: 127.0.0.1
           PORT: '3001'
         run: |
-          set -uo pipefail
-          output=$(node src/server.js 2>&1); status=$?
+          # See the note above: -e must be off, the non-zero exit is the point.
+          set +e
+          output=$(node src/server.js 2>&1)
+          status=$?
+          set -e
           echo "$output"
           test "$status" -ne 0 || { echo "::error::server started with the bypass enabled"; exit 1; }
           echo "$output" | grep -q "RENDER" || { echo "::error::refusal did not name the marker"; exit 1; }
