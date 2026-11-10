@@ -1,5 +1,6 @@
 import supabaseService from '../services/supabaseService.js';
 import logger from '../utils/logger.js';
+import { bypassAllowed } from '../config/authBypass.js';
 
 const adminIds = () =>
   (process.env.ADMIN_USER_IDS || '')
@@ -12,10 +13,13 @@ const adminIds = () =>
  * Sets req.user = { id, email, isAdmin }.
  *
  * For local development without Supabase Auth set AUTH_DISABLED=true: every
- * request is then treated as the user "local-dev". Never set it in production.
+ * request is then treated as the user "local-dev". That bypass is refused
+ * outright when NODE_ENV=production or a managed-platform marker is present
+ * (see config/authBypass.js), and server.js exits at startup rather than boot
+ * into that state — so a stray env var on the host cannot open the API up.
  */
 export async function requireAuth(req, res, next) {
-  if (process.env.AUTH_DISABLED === 'true') {
+  if (bypassAllowed()) {
     req.user = { id: 'local-dev', email: null, isAdmin: true };
     return next();
   }

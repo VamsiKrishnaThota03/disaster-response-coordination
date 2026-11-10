@@ -11,10 +11,20 @@ A disaster-coordination dashboard built with React, Express and Supabase/PostGIS
 ![Supabase](https://img.shields.io/badge/Supabase-3FCF8E?logo=supabase&logoColor=white)
 ![Google Gemini](https://img.shields.io/badge/Google%20Gemini-8E75B2?logo=googlegemini&logoColor=white)
 
+[![CI](https://github.com/VamsiKrishnaThota03/disaster-response-coordination/actions/workflows/ci.yml/badge.svg)](https://github.com/VamsiKrishnaThota03/disaster-response-coordination/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/VamsiKrishnaThota03/disaster-response-coordination/actions/workflows/codeql.yml/badge.svg)](https://github.com/VamsiKrishnaThota03/disaster-response-coordination/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ## Live demo
 
 - Frontend (Vercel): <https://disaster-response-coordination-one.vercel.app>
 - The backend is configured to deploy to Render (`backend/render.yaml`). The frontend's default API URL is `https://disaster-response-coordination.onrender.com`.
+
+> **If the dashboard shows no data,** check
+> <https://disaster-response-coordination.onrender.com/health/ready>. A free
+> Supabase project is paused after about a week of inactivity, and that probe
+> says so explicitly instead of leaving you guessing — see
+> [Health, outages and the auth bypass](#health-outages-and-the-auth-bypass).
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -154,7 +164,8 @@ Open <http://localhost:5173>.
 
 ```bash
 cd backend
-npm test           # Jest (with coverage report)
+npm test           # Jest: 55 tests, no credentials needed
+npm run test:coverage
 npm run test:api   # curl smoke tests against http://localhost:3001
 
 cd ../frontend
@@ -164,10 +175,88 @@ npm run build
 
 `npm test` mocks Supabase, Gemini and OpenCage, so it needs no credentials. `test:api` creates data, so start the server with `AUTH_DISABLED=true` or pass `TOKEN=<supabase access token>`.
 
+CI runs on every push:
+
+| Job | What it proves |
+| --- | --- |
+| `backend` (Node 22, 24) | The 55-test Jest suite, plus coverage on 22 |
+| `auth-bypass-guard` | The real server refuses to boot with `AUTH_DISABLED=true` under `NODE_ENV=production` and under `RENDER=true`; starts cleanly without it; readiness reports 503 with a hint on bad credentials; an anonymous write gets 401; and `SIGTERM` exits cleanly |
+| `frontend` | ESLint with `--max-warnings 0`, and a production build uploaded as an artifact |
+| `docker` | The backend image builds and refuses to start with the bypass enabled |
+
+CodeQL runs weekly and on every push; Dependabot groups weekly patch/minor
+bumps per package.
+
+### Docker
+
+```bash
+docker build -t disaster-response-backend ./backend
+docker run --rm -p 127.0.0.1:3001:3001 \
+  -e SUPABASE_URL=... -e SUPABASE_ANON_KEY=... \
+  disaster-response-backend
+```
+
+Multi-stage, runs as the unprivileged `node` user, carries no dev dependencies
+and declares a `HEALTHCHECK` against `/health`. The example publishes to
+`127.0.0.1` so the container is not reachable from your network.
+
 <p>
   <img src="docs/screenshots/disaster-details.png" alt="Disaster details with nearby resources and map" width="70%">
   <img src="docs/screenshots/mobile.png" alt="Mobile view" width="24%">
 </p>
+
+## Health, outages and the auth bypass
+
+Two things in this service were worth fixing properly rather than papering over.
+
+### An outage used to look identical to a bug
+
+`GET /api/disasters` answered a flat `500 {"error":"Failed to fetch disasters"}`
+whenever Supabase was unreachable — which is exactly what a paused free project
+looks like. A user could not tell the demo was fine-but-asleep, and the logs did
+not distinguish an upstream outage from a defect in our own code.
+
+Now `isUpstreamUnavailable()` classifies the failure. Connection-shaped errors
+(`fetch failed`, `ECONNREFUSED`, `ENOTFOUND`, a wrapped `cause`, Postgres
+connection class `08***`, or missing credentials) become **503 with
+`Retry-After: 60`** and a message saying the database is unavailable. Anything
+else — a `TypeError`, a constraint violation, an authentication failure — stays
+a **500** with no internal detail leaked. The tests assert both directions,
+including that `password authentication failed` is *not* reclassified as an
+outage.
+
+The probes are split along the same line:
+
+| Probe | Touches Supabase? | Purpose |
+| --- | --- | --- |
+| `GET /health` | No | Liveness. The platform must not restart a healthy process just because an upstream is down. |
+| `GET /health/ready` | Yes, one `count`-only query | Readiness. Reports `configured`/`reachable` for Supabase plus whether Gemini and OpenCage keys are set, and a hint naming the likely cause. |
+
+Gemini and OpenCage have documented fallbacks, so they are reported for
+diagnosis but never fail readiness. `render.yaml` points its health check at
+`/health`, not `/health/ready`, on purpose.
+
+### `AUTH_DISABLED` was a comment, not a guard
+
+`AUTH_DISABLED=true` makes every anonymous request a signed-in **admin**. It is
+genuinely useful for working on the UI without a Supabase Auth project, and it
+was already opt-in and off by default — but the only thing standing between it
+and a wide-open production API was a code comment reading "Never set it in
+production". One stray environment variable in the Render dashboard would have
+handed every caller admin rights over every disaster, report and resource.
+
+`backend/src/config/authBypass.js` now refuses the bypass outright when
+`NODE_ENV=production` or any managed-platform marker (`RENDER`, `FLY_APP_NAME`,
+`RAILWAY_ENVIRONMENT`, `DYNO`, `VERCEL`, `AWS_EXECUTION_ENV`,
+`KUBERNETES_SERVICE_HOST`) is present, and `server.js` calls `assertSafe()`
+**before opening the port** — so the deploy fails loudly instead of booting into
+an unauthenticated admin API. The opt-in is also strict: `1`, `yes` and `TRUE`
+do not enable it, only the exact string `true`.
+
+A dedicated CI job proves this, running the real server with
+`AUTH_DISABLED=true` under both `NODE_ENV=production` and `RENDER=true` and
+asserting a non-zero exit with the refusal message, then starting it without the
+bypass and asserting an anonymous write still gets a 401.
 
 ## API
 
@@ -201,6 +290,7 @@ Base URL: `http://localhost:3001`. `GET` routes are public. `POST`, `PUT` and `D
 - Social media posts and official updates are generated mock data, not live feeds.
 - Rows created before sign-in was added have `owner_id` values like `system` or `netrunnerX`; only admins (`ADMIN_USER_IDS`) can edit or delete them.
 - The backend talks to Supabase with the anon key, so Row Level Security policies must allow the anon role to read and write these tables (as before). Authorization is enforced in the API.
-- The rate limiter and the Gemini priority cache are in memory and per instance.
 - Image verification checks the resolved address before fetching, but does not pin it for the connection itself (a DNS-rebinding attacker could still race it).
-- The production bundle is about 780 kB (Chakra UI + Leaflet) and is not code-split yet.
+- The vendor bundle is still large: Chakra UI and Emotion account for a 531 kB `ui` chunk. The build now splits `ui`, `map` (Leaflet) and `realtime` (Socket.IO/Supabase/axios) out of app code, so a change to the app invalidates only a 50 kB chunk instead of the whole 778 kB bundle, but reducing the Chakra payload itself would need per-component imports.
+- Rate limit counters and the Gemini priority cache are per instance, so the limits are per instance too. Scaling beyond one would need a shared store.
+- `/health/ready` issues one `count`-only Supabase query per call. Cheap, but it is a real round trip — do not point an aggressive uptime pinger at it.

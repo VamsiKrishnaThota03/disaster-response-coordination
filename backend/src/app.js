@@ -7,6 +7,7 @@ import disasterRoutes from './routes/disasterRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import resourceRoutes from './routes/resourceRoutes.js';
 import socialMediaRoutes from './routes/socialMediaRoutes.js';
+import supabaseService from './services/supabaseService.js';
 
 dotenv.config();
 
@@ -46,7 +47,42 @@ export function createApp() {
   );
   app.use(express.json({ limit: '100kb' }));
 
-  app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+  // Liveness: the process is accepting connections. Deliberately independent of
+  // Supabase, so the platform does not restart a healthy process during an
+  // upstream outage.
+  app.get('/health', (req, res) => res.status(200).json({ status: 'ok', uptime: process.uptime() }));
+
+  // Readiness: can we actually reach the datastore? This is what turns
+  // "the demo is broken" into "the Supabase project is paused", with no deploy.
+  app.get('/health/ready', async (req, res) => {
+    const checks = {
+      supabase: {
+        configured: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY),
+      },
+      // Both of these have documented fallbacks, so they are reported for
+      // diagnosis but are not load-bearing for readiness.
+      gemini: { configured: Boolean(process.env.GEMINI_API_KEY) },
+      opencage: { configured: Boolean(process.env.OPENCAGE_API_KEY) },
+    };
+
+    try {
+      await supabaseService.ping();
+      checks.supabase.reachable = true;
+      return res.json({ status: 'ready', checks });
+    } catch (error) {
+      checks.supabase.reachable = false;
+      checks.supabase.error = error?.message || String(error);
+      logger.error(`Readiness check failed: ${checks.supabase.error}`);
+      res.set('Retry-After', '60');
+      return res.status(503).json({
+        status: 'unavailable',
+        hint: checks.supabase.configured
+          ? 'Supabase is configured but unreachable. A free project is paused after about a week idle; resume it from the Supabase dashboard.'
+          : 'Set SUPABASE_URL and SUPABASE_ANON_KEY.',
+        checks,
+      });
+    }
+  });
 
   app.use('/api', rateLimit);
   app.use('/api/disasters', disasterRoutes);

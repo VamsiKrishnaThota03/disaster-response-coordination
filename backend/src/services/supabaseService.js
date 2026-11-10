@@ -31,6 +31,19 @@ class SupabaseService {
     return this.supabase;
   }
 
+  /**
+   * Cheapest round trip that proves the project is awake, the credentials work
+   * and the `disasters` table exists. Used by the readiness probe.
+   *
+   * `head: true` with `count: 'exact'` returns no rows, so this is cheap enough
+   * to poll. Throws on any failure so the caller can report the reason.
+   */
+  async ping() {
+    const { error } = await this.db.from('disasters').select('id', { count: 'exact', head: true });
+    if (error) throw error;
+    return true;
+  }
+
   /** Verify a Supabase Auth access token and return the user, or null. */
   async getUserFromToken(token) {
     if (!token) return null;

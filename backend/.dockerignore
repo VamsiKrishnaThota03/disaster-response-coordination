@@ -1,0 +1,12 @@
+node_modules
+coverage
+src/tests
+.env
+.env.*
+!.env.example
+*.log
+.git
+.github
+Dockerfile
+.dockerignore
+test-api.sh
